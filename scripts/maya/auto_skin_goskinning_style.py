@@ -1,73 +1,53 @@
 # -*- coding: utf-8 -*-
 """
-Auto Skin (goSkinning Style) - Maya Python
+Auto Skin (goSkinning 风格) - Maya 自动蒙皮工具
 
-Replicates key features of goSkinning:
-- Heat map / distance-based weight calculation
-- Weight pruning (remove small weights)
-- Max influences limit
-- Batch processing with Maya API for performance
-- Progress feedback
-- AI model integration (optional)
+功能特点:
+- Heat Map / 距离权重计算
+- 权重修剪 (Prune)
+- 最大影响数限制 (Max Influences)
+- 权重平滑 (Smooth)
+- AI 模型支持（可选）
+- Maya API 批处理加速
 
-Author: Based on goSkinning workflow
+使用方法:
+    import auto_skin_goskinning_style
+    auto_skin_goskinning_style.show_auto_skin_window()
+
+作者: Auto Skin AI
 """
 
+from __future__ import print_function
 import maya.cmds as cmds
 import maya.api.OpenMaya as om2
 import math
-from functools import partial
 
-# ====== Config ======
-USE_TORCH = False
-MODEL_PATH = r"C:\ai_models\auto_skin_net.pt"
+# ============================================================================
+# 配置
+# ============================================================================
 
-model = None
+# AI 模型配置
+USE_TORCH = False  # 设为 True 启用 AI 模型
+MODEL_PATH = r"D:\AutoSkinAI\models\skin_weight_model.pt"  # 模型路径
 
+# 全局变量
+_ai_model = None
+_ai_predictor = None
+
+# 尝试加载 PyTorch
 if USE_TORCH:
     try:
         import torch
-        import torch.nn as nn
-
-        class SkinWeightNet(nn.Module):
-            """
-            Neural network for skin weight prediction.
-            goSkinning-style: takes vertex position + bone features as input.
-            """
-            def __init__(self, num_joints, hidden_dim=256):
-                super(SkinWeightNet, self).__init__()
-                # Input: vertex pos(3) + per-joint features(num_joints * 7)
-                # Per-joint features: bone_start(3) + bone_end(3) + distance(1)
-                input_dim = 3 + num_joints * 7
-                self.net = nn.Sequential(
-                    nn.Linear(input_dim, hidden_dim),
-                    nn.ReLU(),
-                    nn.BatchNorm1d(hidden_dim),
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.ReLU(),
-                    nn.BatchNorm1d(hidden_dim),
-                    nn.Linear(hidden_dim, hidden_dim // 2),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim // 2, num_joints),
-                )
-
-            def forward(self, x):
-                return self.net(x)
-
-        def load_model():
-            global model
-            if model is None:
-                print("[AutoSkin] Loading model from:", MODEL_PATH)
-                model = torch.jit.load(MODEL_PATH, map_location="cpu")
-                model.eval()
-            return model
-
+        print("[AutoSkin] PyTorch 已加载")
     except ImportError:
-        print("[AutoSkin] WARNING: PyTorch not available, using heat map weights.")
+        print("[AutoSkin] 警告: PyTorch 未安装，将使用 Heat Map 方法")
         USE_TORCH = False
 
 
-# ====== Global UI handles ======
+# ============================================================================
+# UI 全局变量
+# ============================================================================
+
 g_mesh_list = None
 g_joint_list = None
 g_model_menu = None
@@ -75,775 +55,794 @@ g_prune_slider = None
 g_max_inf_field = None
 g_smooth_iter_field = None
 g_status_text = None
-g_single_body_cb = None
 
 
-# ====== Maya API Helpers ======
+# ============================================================================
+# Maya API 辅助函数
+# ============================================================================
 
 def get_mesh_fn(mesh):
-    """Get MFnMesh function set for a mesh."""
+    """获取 MFnMesh 对象"""
     sel = om2.MSelectionList()
     sel.add(mesh)
     dag_path = sel.getDagPath(0)
     return om2.MFnMesh(dag_path), dag_path
 
 
-def get_vertex_positions_fast(mesh):
+def get_vertex_positions(mesh):
     """
-    Get all vertex world positions using Maya API (much faster than cmds.xform).
-    Returns list of [x, y, z] positions.
+    快速获取所有顶点的世界坐标
+    返回: [[x, y, z], ...]
     """
-    mesh_fn, dag_path = get_mesh_fn(mesh)
+    mesh_fn, _ = get_mesh_fn(mesh)
     points = mesh_fn.getPoints(om2.MSpace.kWorld)
     return [[p.x, p.y, p.z] for p in points]
 
 
-def get_vertex_normals_fast(mesh):
-    """Get all vertex normals using Maya API."""
-    mesh_fn, dag_path = get_mesh_fn(mesh)
-    normals = mesh_fn.getVertexNormals(False, om2.MSpace.kWorld)
-    return [[n.x, n.y, n.z] for n in normals]
-
-
-def get_mesh_connectivity(mesh):
+def get_mesh_neighbors(mesh):
     """
-    Get mesh connectivity for geodesic-like calculations.
-    Returns: vertex_neighbors dict {vid: [neighbor_vids]}
+    获取 mesh 的顶点邻接关系
+    返回: {vertex_id: [neighbor_ids]}
     """
     mesh_fn, _ = get_mesh_fn(mesh)
     num_verts = mesh_fn.numVertices
-
-    # Build adjacency from edges
+    
     neighbors = {i: set() for i in range(num_verts)}
-
-    num_edges = mesh_fn.numEdges
-    for edge_id in range(num_edges):
+    
+    for edge_id in range(mesh_fn.numEdges):
         v0, v1 = mesh_fn.getEdgeVertices(edge_id)
         neighbors[v0].add(v1)
         neighbors[v1].add(v0)
-
+    
     return {k: list(v) for k, v in neighbors.items()}
 
 
-def get_joint_world_position(joint):
-    """Get joint world position."""
-    pos = cmds.xform(joint, q=True, ws=True, t=True)
-    return pos
+def get_joint_position(joint):
+    """获取骨骼世界坐标"""
+    return cmds.xform(joint, q=True, ws=True, t=True)
 
 
 def get_joint_data(joints):
     """
-    Get joint positions and bone directions.
-    Returns: list of dicts with 'pos', 'parent_pos', 'bone_dir', 'bone_length'
+    获取骨骼数据
+    返回: [{'name', 'pos', 'parent_pos', 'bone_dir', 'bone_length'}, ...]
     """
-    joint_data = []
+    data = []
+    
     for j in joints:
-        pos = get_joint_world_position(j)
-
-        # Get parent joint position for bone direction
+        pos = get_joint_position(j)
+        
+        # 获取父骨骼位置
         parent = cmds.listRelatives(j, parent=True, type="joint")
         if parent:
-            parent_pos = get_joint_world_position(parent[0])
+            parent_pos = get_joint_position(parent[0])
         else:
-            parent_pos = pos  # Root joint
-
-        # Bone direction (from parent to this joint)
+            parent_pos = pos
+        
+        # 计算骨骼方向和长度
         bone_vec = [pos[i] - parent_pos[i] for i in range(3)]
-        bone_length = math.sqrt(sum(v*v for v in bone_vec))
-
+        bone_length = math.sqrt(sum(v * v for v in bone_vec))
+        
         if bone_length > 1e-6:
             bone_dir = [v / bone_length for v in bone_vec]
         else:
             bone_dir = [0, 1, 0]
             bone_length = 0.01
-
-        joint_data.append({
+        
+        data.append({
             'name': j,
             'pos': pos,
             'parent_pos': parent_pos,
             'bone_dir': bone_dir,
             'bone_length': bone_length
         })
+    
+    return data
 
-    return joint_data
 
-
-# ====== Weight Calculation Methods ======
+# ============================================================================
+# 权重计算方法
+# ============================================================================
 
 def euclidean_distance(p1, p2):
-    """Calculate Euclidean distance between two 3D points."""
+    """计算欧几里得距离"""
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(p1, p2)))
 
 
 def point_to_bone_distance(point, bone_start, bone_end):
     """
-    Calculate minimum distance from point to bone segment.
-    This is key to goSkinning-style weighting.
+    计算点到骨骼线段的最短距离
+    这是 goSkinning 风格权重计算的核心
     """
     px, py, pz = point
     ax, ay, az = bone_start
     bx, by, bz = bone_end
-
-    # Vector from bone start to end
+    
+    # 骨骼向量
     ab = [bx - ax, by - ay, bz - az]
-    # Vector from bone start to point
+    # 点到骨骼起点的向量
     ap = [px - ax, py - ay, pz - az]
-
-    ab_len_sq = sum(v*v for v in ab)
-
+    
+    ab_len_sq = sum(v * v for v in ab)
+    
     if ab_len_sq < 1e-10:
-        # Degenerate bone (zero length)
         return euclidean_distance(point, bone_start)
-
-    # Project point onto bone line
+    
+    # 投影到骨骼线上
     t = sum(ap[i] * ab[i] for i in range(3)) / ab_len_sq
-    t = max(0.0, min(1.0, t))  # Clamp to bone segment
-
-    # Closest point on bone
+    t = max(0.0, min(1.0, t))  # 限制在线段内
+    
+    # 最近点
     closest = [ax + t * ab[0], ay + t * ab[1], az + t * ab[2]]
-
+    
     return euclidean_distance(point, closest)
 
 
 def calculate_heat_map_weights(positions, joint_data, falloff=2.0):
     """
-    Calculate weights using heat map / inverse distance method.
-    This is similar to goSkinning's approach.
-
-    falloff: higher = sharper falloff (more localized weights)
+    Heat Map 权重计算（goSkinning 核心算法）
+    
+    参数:
+        positions: 顶点位置列表
+        joint_data: 骨骼数据列表
+        falloff: 衰减系数（越大衰减越快）
+    
+    返回:
+        weights[vertex][joint]
     """
     num_verts = len(positions)
-    num_joints = len(joint_data)
     weights = []
-
+    
     for vid in range(num_verts):
         pos = positions[vid]
-        raw_weights = []
-
+        raw = []
+        
         for jd in joint_data:
-            # Calculate distance to bone segment
+            # 计算到骨骼的距离
             dist = point_to_bone_distance(pos, jd['parent_pos'], jd['pos'])
-
-            # Add small epsilon to avoid division by zero
-            dist = max(dist, 0.001)
-
-            # Inverse distance weighting with falloff
-            # Higher falloff = sharper transition
+            dist = max(dist, 0.001)  # 避免除零
+            
+            # 反距离权重
             w = 1.0 / (dist ** falloff)
-            raw_weights.append(w)
-
-        weights.append(raw_weights)
-
+            raw.append(w)
+        
+        weights.append(raw)
+    
     return weights
 
 
-def calculate_envelope_weights(positions, joint_data, envelope_scale=1.0):
+def calculate_envelope_weights(positions, joint_data, envelope_scale=1.5):
     """
-    Calculate weights using bone envelope method.
-    Each bone has an influence radius based on its length.
+    包络体权重计算
+    
+    每个骨骼有一个基于其长度的影响范围
     """
     num_verts = len(positions)
-    num_joints = len(joint_data)
     weights = []
-
+    
     for vid in range(num_verts):
         pos = positions[vid]
-        raw_weights = []
-
+        raw = []
+        
         for jd in joint_data:
             dist = point_to_bone_distance(pos, jd['parent_pos'], jd['pos'])
-
-            # Envelope radius based on bone length
             envelope = jd['bone_length'] * envelope_scale
-
+            
             if dist < envelope:
-                # Inside envelope: smooth falloff
+                # 在包络体内：平滑衰减
                 t = dist / envelope
-                w = 1.0 - (t * t * (3.0 - 2.0 * t))  # Smoothstep
+                w = 1.0 - (t * t * (3.0 - 2.0 * t))
             else:
-                # Outside envelope: rapid falloff
-                w = envelope / (dist * dist)
-
-            raw_weights.append(w)
-
-        weights.append(raw_weights)
-
+                # 在包络体外：快速衰减
+                w = envelope / (dist * dist + 0.001)
+            
+            raw.append(max(w, 0.0))
+        
+        weights.append(raw)
+    
     return weights
 
 
-def predict_weights_with_ai(positions, joint_data):
+def calculate_ai_weights(positions, joint_data):
     """
-    Predict weights using AI model.
-    Builds proper feature vectors like goSkinning.
+    使用 AI 模型计算权重
     """
-    if not USE_TORCH or model is None:
+    global _ai_predictor
+    
+    if not USE_TORCH:
+        return None
+    
+    try:
+        # 延迟加载预测器
+        if _ai_predictor is None:
+            import auto_skin_ai_training as train
+            _ai_predictor = train.SkinWeightPredictor(MODEL_PATH)
+        
+        # 转换骨骼数据格式
+        jd_for_predict = []
+        for jd in joint_data:
+            jd_for_predict.append({
+                'position': jd['pos'],
+                'parent_position': jd['parent_pos']
+            })
+        
+        weights = _ai_predictor.predict(positions, jd_for_predict)
+        return weights
+    
+    except Exception as e:
+        print("[AutoSkin] AI 预测失败: %s" % str(e))
         return None
 
-    import torch
 
-    num_verts = len(positions)
-    num_joints = len(joint_data)
-
-    # Build feature vectors
-    features = []
-    for vid in range(num_verts):
-        pos = positions[vid]
-        feat = list(pos)  # Start with vertex position
-
-        # Add per-joint features
-        for jd in joint_data:
-            feat.extend(jd['parent_pos'])  # Bone start
-            feat.extend(jd['pos'])         # Bone end
-            dist = point_to_bone_distance(pos, jd['parent_pos'], jd['pos'])
-            feat.append(dist)
-
-        features.append(feat)
-
-    # Run inference
-    with torch.no_grad():
-        x = torch.tensor(features, dtype=torch.float32)
-        pred = model(x)
-        pred = torch.softmax(pred, dim=-1)
-        weights = pred.cpu().numpy().tolist()
-
-    return weights
-
-
-# ====== Weight Post-Processing (goSkinning key features) ======
+# ============================================================================
+# 权重后处理
+# ============================================================================
 
 def normalize_weights(weights):
-    """Normalize weights so each vertex sums to 1.0."""
+    """归一化权重（每个顶点权重和为 1）"""
     normalized = []
+    
     for row in weights:
         s = sum(row)
         if s > 1e-8:
             normalized.append([w / s for w in row])
         else:
-            # Uniform fallback
             n = len(row)
             normalized.append([1.0 / n] * n)
+    
     return normalized
 
 
 def prune_weights(weights, threshold=0.01):
     """
-    Remove weights below threshold (goSkinning's "Prune" feature).
-    This cleans up noisy small influences.
+    修剪权重（移除低于阈值的小权重）
     """
     pruned = []
+    
     for row in weights:
         new_row = [w if w >= threshold else 0.0 for w in row]
         pruned.append(new_row)
+    
     return normalize_weights(pruned)
 
 
 def limit_max_influences(weights, max_influences=4):
     """
-    Limit maximum number of joint influences per vertex.
-    goSkinning allows setting this (common values: 4, 8).
+    限制最大影响数（每个顶点最多受 N 个骨骼影响）
     """
     limited = []
+    
     for row in weights:
-        if sum(1 for w in row if w > 0) <= max_influences:
+        # 统计非零权重数
+        non_zero = sum(1 for w in row if w > 0)
+        
+        if non_zero <= max_influences:
             limited.append(row)
             continue
-
-        # Keep only top N influences
+        
+        # 保留最大的 N 个权重
         indexed = [(i, w) for i, w in enumerate(row)]
         indexed.sort(key=lambda x: -x[1])
-
+        
         new_row = [0.0] * len(row)
         for i in range(max_influences):
             idx, w = indexed[i]
             new_row[idx] = w
-
+        
         limited.append(new_row)
-
+    
     return normalize_weights(limited)
 
 
 def smooth_weights(weights, neighbors, iterations=1, strength=0.5):
     """
-    Smooth weights using neighbor averaging.
-    goSkinning has a smooth/relax feature.
+    平滑权重（基于邻居顶点平均）
     """
     current = [list(row) for row in weights]
     num_joints = len(weights[0]) if weights else 0
-
+    
     for _ in range(iterations):
         new_weights = []
+        
         for vid, row in enumerate(current):
             neighbor_ids = neighbors.get(vid, [])
+            
             if not neighbor_ids:
                 new_weights.append(row)
                 continue
-
-            # Average neighbor weights
+            
+            # 计算邻居平均权重
             avg = [0.0] * num_joints
             for nid in neighbor_ids:
                 for j in range(num_joints):
                     avg[j] += current[nid][j]
-
+            
             n = len(neighbor_ids)
             avg = [a / n for a in avg]
-
-            # Blend with original
-            blended = [row[j] * (1 - strength) + avg[j] * strength
-                      for j in range(num_joints)]
+            
+            # 混合原始权重和平均权重
+            blended = [
+                row[j] * (1 - strength) + avg[j] * strength
+                for j in range(num_joints)
+            ]
             new_weights.append(blended)
-
+        
         current = new_weights
-
+    
     return normalize_weights(current)
 
 
-# ====== SkinCluster Operations ======
+# ============================================================================
+# SkinCluster 操作
+# ============================================================================
 
 def find_skin_cluster(mesh):
-    """Find existing skinCluster on a mesh."""
+    """查找 mesh 上的 skinCluster"""
     history = cmds.listHistory(mesh) or []
-    skins = [h for h in history if cmds.nodeType(h) == "skinCluster"]
-    return skins[0] if skins else None
+    for node in history:
+        if cmds.nodeType(node) == "skinCluster":
+            return node
+    return None
 
 
-def ensure_skin_cluster(mesh, joints, max_influences=4):
-    """Create or get skinCluster with proper settings."""
+def create_skin_cluster(mesh, joints, max_influences=4):
+    """创建或获取 skinCluster"""
     skin = find_skin_cluster(mesh)
+    
     if skin:
-        print("[AutoSkin] Found existing skinCluster:", skin)
-        # Update max influences
+        print("[AutoSkin] 使用已有 skinCluster: %s" % skin)
         cmds.skinCluster(skin, e=True, maximumInfluences=max_influences)
         return skin
-
-    print("[AutoSkin] Creating new skinCluster for:", mesh)
+    
+    print("[AutoSkin] 创建新 skinCluster...")
     skin = cmds.skinCluster(
         joints, mesh,
         toSelectedBones=True,
         maximumInfluences=max_influences,
-        skinMethod=0,  # Classic linear
-        normalizeWeights=1,  # Interactive
+        skinMethod=0,
+        normalizeWeights=1,
         obeyMaxInfluences=True
     )[0]
+    
     return skin
 
 
-def apply_weights_batch(mesh, joints, skin, weights, progress_callback=None):
+def apply_weights(mesh, joints, skin, weights, progress_callback=None):
     """
-    Apply weights using batch operations (faster than per-vertex).
+    应用权重到 skinCluster
     """
     num_verts = len(weights)
     if num_verts == 0:
-        cmds.warning("No vertices to skin.")
         return
-
-    # Use long names
+    
+    # 使用长名称
     joints_long = [cmds.ls(j, long=True)[0] for j in joints]
     num_joints = len(joints_long)
-
-    # Ensure all joints are influences
+    
+    # 确保所有骨骼都是影响体
     current_infs = cmds.skinCluster(skin, q=True, inf=True) or []
     current_infs_long = [cmds.ls(i, long=True)[0] for i in current_infs]
-
+    
     for j in joints_long:
         if j not in current_infs_long:
             try:
                 cmds.skinCluster(skin, e=True, addInfluence=j, lockWeights=True, weight=0)
-                current_infs_long.append(j)
-            except RuntimeError as e:
-                if "already attached" not in str(e):
-                    raise
-
-    # Apply weights in batches for better performance
+            except RuntimeError:
+                pass
+    
+    # 分批应用权重
     batch_size = 100
+    
     for start in range(0, num_verts, batch_size):
         end = min(start + batch_size, num_verts)
-
+        
         for vid in range(start, end):
             vtx = "%s.vtx[%d]" % (mesh, vid)
             w_row = weights[vid]
-
-            # Build transform-value pairs only for non-zero weights
+            
+            # 构建权重对
             tv = [(joints_long[j], w_row[j]) for j in range(num_joints) if w_row[j] > 0]
-
+            
             if tv:
                 cmds.skinPercent(skin, vtx, transformValue=tv, normalize=True)
-
-        # Progress callback
+        
+        # 进度回调
         if progress_callback:
-            progress = (end / float(num_verts)) * 100
-            progress_callback(progress)
+            pct = (end / float(num_verts)) * 100
+            progress_callback(pct)
+    
+    print("[AutoSkin] 权重已应用到 %d 个顶点" % num_verts)
 
-    print("[AutoSkin] Applied weights to", num_verts, "vertices.")
 
+# ============================================================================
+# 主蒙皮流程
+# ============================================================================
 
-# ====== Main Skinning Pipeline ======
-
-def auto_skin_goskinning_style(mesh, joints, options=None):
+def auto_skin(mesh, joints, options=None):
     """
-    Main auto-skinning pipeline (goSkinning style).
-
-    options dict:
-        - method: 'heat_map' | 'envelope' | 'ai'
-        - falloff: float (default 2.0)
-        - prune_threshold: float (default 0.01)
-        - max_influences: int (default 4)
-        - smooth_iterations: int (default 1)
-        - smooth_strength: float (default 0.5)
+    自动蒙皮主函数
+    
+    参数:
+        mesh: 要蒙皮的 mesh
+        joints: 骨骼列表
+        options: 选项字典
+            - method: 'heat_map' | 'envelope' | 'ai'
+            - falloff: float (heat_map 衰减)
+            - prune_threshold: float (修剪阈值)
+            - max_influences: int (最大影响数)
+            - smooth_iterations: int (平滑迭代次数)
+            - smooth_strength: float (平滑强度)
     """
     if not mesh or not joints:
-        cmds.error("Mesh or joints missing.")
+        cmds.error("需要指定 mesh 和 joints")
         return
-
-    # Default options
+    
+    # 默认选项
     if options is None:
         options = {}
-
+    
     method = options.get('method', 'heat_map')
     falloff = options.get('falloff', 2.0)
     prune_threshold = options.get('prune_threshold', 0.01)
     max_influences = options.get('max_influences', 4)
     smooth_iterations = options.get('smooth_iterations', 1)
     smooth_strength = options.get('smooth_strength', 0.5)
-
-    update_status("Getting vertex positions...")
-    positions = get_vertex_positions_fast(mesh)
-    print("[AutoSkin] Mesh has", len(positions), "vertices")
-
-    update_status("Analyzing joint structure...")
+    
+    print("=" * 60)
+    print("[AutoSkin] 开始自动蒙皮")
+    print("=" * 60)
+    print("[AutoSkin] Mesh: %s" % mesh)
+    print("[AutoSkin] 骨骼数: %d" % len(joints))
+    print("[AutoSkin] 方法: %s" % method)
+    
+    # 获取顶点数据
+    update_status("获取顶点数据...")
+    positions = get_vertex_positions(mesh)
+    print("[AutoSkin] 顶点数: %d" % len(positions))
+    
+    # 获取骨骼数据
+    update_status("分析骨骼结构...")
     joint_data = get_joint_data(joints)
-
-    # Calculate initial weights
-    update_status("Calculating weights (%s)..." % method)
-
-    if method == 'ai' and USE_TORCH:
-        load_model()
-        weights = predict_weights_with_ai(positions, joint_data)
+    
+    # 计算权重
+    update_status("计算权重 (%s)..." % method)
+    
+    if method == 'ai':
+        weights = calculate_ai_weights(positions, joint_data)
         if weights is None:
-            print("[AutoSkin] AI model failed, falling back to heat_map")
+            print("[AutoSkin] AI 失败，回退到 heat_map")
             weights = calculate_heat_map_weights(positions, joint_data, falloff)
     elif method == 'envelope':
         weights = calculate_envelope_weights(positions, joint_data)
     else:
         weights = calculate_heat_map_weights(positions, joint_data, falloff)
-
-    # Normalize
+    
+    # 归一化
     weights = normalize_weights(weights)
-
-    # Prune small weights
-    update_status("Pruning weights (threshold: %.3f)..." % prune_threshold)
-    weights = prune_weights(weights, prune_threshold)
-
-    # Limit max influences
-    update_status("Limiting to %d influences..." % max_influences)
+    
+    # 修剪
+    if prune_threshold > 0:
+        update_status("修剪权重 (阈值: %.3f)..." % prune_threshold)
+        weights = prune_weights(weights, prune_threshold)
+    
+    # 限制影响数
+    update_status("限制最大影响数 (%d)..." % max_influences)
     weights = limit_max_influences(weights, max_influences)
-
-    # Smooth weights
+    
+    # 平滑
     if smooth_iterations > 0:
-        update_status("Smoothing weights (%d iterations)..." % smooth_iterations)
-        neighbors = get_mesh_connectivity(mesh)
+        update_status("平滑权重 (%d 次)..." % smooth_iterations)
+        neighbors = get_mesh_neighbors(mesh)
         weights = smooth_weights(weights, neighbors, smooth_iterations, smooth_strength)
-
-    # Create/get skinCluster
-    update_status("Creating skinCluster...")
-    skin = ensure_skin_cluster(mesh, joints, max_influences)
-
-    # Apply weights
-    update_status("Applying weights...")
-
-    def progress_cb(pct):
-        update_status("Applying weights... %.0f%%" % pct)
-
-    apply_weights_batch(mesh, joints, skin, weights, progress_cb)
-
-    update_status("Done!")
+    
+    # 创建 skinCluster
+    update_status("创建 skinCluster...")
+    skin = create_skin_cluster(mesh, joints, max_influences)
+    
+    # 应用权重
+    update_status("应用权重...")
+    
+    def on_progress(pct):
+        update_status("应用权重... %.0f%%" % pct)
+    
+    apply_weights(mesh, joints, skin, weights, on_progress)
+    
+    update_status("完成!")
+    print("=" * 60)
+    print("[AutoSkin] 蒙皮完成!")
+    print("=" * 60)
+    
     cmds.inViewMessage(
-        amg="<hl>Auto Skin</hl>: Finished skinning %s" % mesh,
+        amg="<hl>Auto Skin</hl>: 蒙皮完成 - %s" % mesh,
         pos="topCenter",
         fade=True
     )
 
 
 def update_status(msg):
-    """Update status text in UI."""
+    """更新状态文本"""
     global g_status_text
     if g_status_text and cmds.text(g_status_text, exists=True):
         cmds.text(g_status_text, e=True, label=msg)
-    print("[AutoSkin]", msg)
+    print("[AutoSkin] %s" % msg)
 
 
-# ====== UI Callbacks ======
+# ============================================================================
+# UI 回调函数
+# ============================================================================
 
-def _add_selected_mesh_to_list(*args):
+def _on_add_mesh(*args):
+    """添加选中的 mesh"""
     global g_mesh_list
     if not g_mesh_list:
         return
-
+    
     sel = cmds.ls(sl=True, long=True) or []
     meshes = []
-
+    
     for node in sel:
         shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
         for s in shapes:
             if cmds.nodeType(s) == "mesh":
                 meshes.append(node)
                 break
-
+    
     if not meshes:
-        cmds.warning("Please select at least one polygon mesh.")
+        cmds.warning("请选择至少一个多边形 mesh")
         return
-
+    
     existing = cmds.textScrollList(g_mesh_list, q=True, ai=True) or []
     for m in meshes:
         if m not in existing:
             cmds.textScrollList(g_mesh_list, e=True, append=m)
 
 
-def _add_selected_joints_to_list(*args):
+def _on_add_joints(*args):
+    """添加选中的骨骼"""
     global g_joint_list
     if not g_joint_list:
         return
-
+    
     joints = cmds.ls(sl=True, type="joint", long=True) or []
     if not joints:
-        cmds.warning("Please select at least one joint.")
+        cmds.warning("请选择至少一个骨骼")
         return
-
+    
     existing = cmds.textScrollList(g_joint_list, q=True, ai=True) or []
     for j in joints:
         if j not in existing:
             cmds.textScrollList(g_joint_list, e=True, append=j)
 
 
-def _add_joint_hierarchy(*args):
-    """Add selected joint and all its children."""
+def _on_add_hierarchy(*args):
+    """添加选中骨骼及其所有子骨骼"""
     global g_joint_list
     if not g_joint_list:
         return
-
+    
     sel = cmds.ls(sl=True, type="joint", long=True) or []
     if not sel:
-        cmds.warning("Please select a root joint.")
+        cmds.warning("请选择一个根骨骼")
         return
-
-    # Get all descendants
+    
     all_joints = set(sel)
     for j in sel:
         children = cmds.listRelatives(j, allDescendents=True, type="joint", fullPath=True) or []
         all_joints.update(children)
-
+    
     existing = cmds.textScrollList(g_joint_list, q=True, ai=True) or []
     for j in sorted(all_joints):
         if j not in existing:
             cmds.textScrollList(g_joint_list, e=True, append=j)
+    
+    print("[AutoSkin] 添加了 %d 个骨骼" % len(all_joints))
 
 
-def _remove_selected_from_list(list_control, *args):
+def _on_remove_item(list_control, *args):
+    """移除选中项"""
     if not list_control:
         return
-    sel_items = cmds.textScrollList(list_control, q=True, si=True) or []
-    for item in sel_items:
+    items = cmds.textScrollList(list_control, q=True, si=True) or []
+    for item in items:
         cmds.textScrollList(list_control, e=True, ri=item)
 
 
-def _clear_list(list_control, *args):
+def _on_clear_list(list_control, *args):
+    """清空列表"""
     if not list_control:
         return
     cmds.textScrollList(list_control, e=True, ra=True)
 
 
 def _on_start_skinning(*args):
-    """Start skinning button callback."""
+    """开始蒙皮按钮回调"""
     global g_mesh_list, g_joint_list, g_model_menu
     global g_prune_slider, g_max_inf_field, g_smooth_iter_field
-
+    
     meshes = cmds.textScrollList(g_mesh_list, q=True, ai=True) or []
     joints = cmds.textScrollList(g_joint_list, q=True, ai=True) or []
-
+    
     if not meshes:
-        cmds.error("Please add at least one mesh.")
+        cmds.warning("请添加至少一个 mesh")
         return
     if not joints:
-        cmds.error("Please add at least one joint.")
+        cmds.warning("请添加至少一个骨骼")
         return
-
-    # Get options from UI
-    model_preset = cmds.optionMenu(g_model_menu, q=True, v=True)
-    prune_threshold = cmds.floatSliderGrp(g_prune_slider, q=True, v=True)
-    max_influences = cmds.intField(g_max_inf_field, q=True, v=True)
-    smooth_iterations = cmds.intField(g_smooth_iter_field, q=True, v=True)
-
-    # Determine method based on preset
-    if "ai" in model_preset.lower() or "neural" in model_preset.lower():
+    
+    # 获取选项
+    preset = cmds.optionMenu(g_model_menu, q=True, v=True)
+    prune = cmds.floatSliderGrp(g_prune_slider, q=True, v=True)
+    max_inf = cmds.intField(g_max_inf_field, q=True, v=True)
+    smooth = cmds.intField(g_smooth_iter_field, q=True, v=True)
+    
+    # 确定方法
+    if "ai" in preset.lower() or "neural" in preset.lower():
         method = 'ai'
-    elif "envelope" in model_preset.lower():
+    elif "envelope" in preset.lower():
         method = 'envelope'
     else:
         method = 'heat_map'
-
+    
     options = {
         'method': method,
         'falloff': 2.0,
-        'prune_threshold': prune_threshold,
-        'max_influences': max_influences,
-        'smooth_iterations': smooth_iterations,
+        'prune_threshold': prune,
+        'max_influences': max_inf,
+        'smooth_iterations': smooth,
         'smooth_strength': 0.5
     }
-
-    print("[AutoSkin] Starting with options:", options)
-
-    # Skin each mesh
+    
+    # 对每个 mesh 执行蒙皮
     for mesh in meshes:
-        auto_skin_goskinning_style(mesh, joints, options)
+        auto_skin(mesh, joints, options)
 
 
 def _on_fix_weights(*args):
-    """Fix weights button - smooth selected vertices."""
+    """修复权重（平滑选中顶点）"""
     sel = cmds.ls(sl=True, fl=True) or []
     if not sel:
-        cmds.warning("Select vertices to smooth weights.")
+        cmds.warning("请选择要平滑的顶点")
         return
-
-    # Find mesh and skinCluster
+    
     mesh = sel[0].split(".")[0]
     skin = find_skin_cluster(mesh)
+    
     if not skin:
-        cmds.warning("No skinCluster found on", mesh)
+        cmds.warning("未找到 skinCluster")
         return
-
-    # Use Maya's built-in smooth
+    
     cmds.skinCluster(skin, e=True, smoothWeights=0.5)
-    print("[AutoSkin] Smoothed weights for selected vertices.")
+    print("[AutoSkin] 已平滑选中顶点的权重")
 
 
-# ====== Main UI ======
+# ============================================================================
+# UI 创建
+# ============================================================================
 
 def show_auto_skin_window():
-    """Create and show the goSkinning-style UI."""
+    """显示自动蒙皮 UI 窗口"""
     global g_mesh_list, g_joint_list, g_model_menu
     global g_prune_slider, g_max_inf_field, g_smooth_iter_field
-    global g_status_text, g_single_body_cb
-
-    win_name = "AutoSkinGoStyleWindow"
+    global g_status_text
+    
+    win_name = "AutoSkinWindow"
     if cmds.window(win_name, exists=True):
         cmds.deleteUI(win_name)
-
-    win = cmds.window(win_name, title="Auto Skin (goSkinning Style)", widthHeight=(400, 500))
+    
+    win = cmds.window(win_name, title="Auto Skin (goSkinning Style)", widthHeight=(420, 520))
+    
     main_col = cmds.columnLayout(adj=True, rowSpacing=4)
-
-    # ===== Model Preset Frame =====
-    cmds.frameLayout(label="Model Preset", collapsable=True, collapse=False,
-                     marginWidth=8, marginHeight=8, parent=main_col)
-    col = cmds.columnLayout(adj=True, rowSpacing=4)
-
+    
+    # ===== 模型预设 =====
+    cmds.frameLayout(label="模型预设", collapsable=True, collapse=False,
+                     marginWidth=10, marginHeight=8, parent=main_col)
+    cmds.columnLayout(adj=True, rowSpacing=4)
+    
     cmds.rowLayout(numberOfColumns=2, adjustableColumn=2)
-    cmds.text(label="Preset:", width=70)
+    cmds.text(label="预设:", width=60)
     g_model_menu = cmds.optionMenu()
-    cmds.menuItem(label="general-v1 (Heat Map)")
-    cmds.menuItem(label="general-v4-beta (Envelope)")
-    cmds.menuItem(label="neural-net (AI)")
-    cmds.menuItem(label="custom")
+    cmds.menuItem(label="Heat Map (默认)")
+    cmds.menuItem(label="Envelope")
+    cmds.menuItem(label="Neural Net (AI)")
     cmds.setParent("..")
-
-    g_single_body_cb = cmds.checkBox(label="Single body mesh", v=True,
-        ann="Optimize for single connected mesh (character body)")
-
-    cmds.setParent("..")  # col
-    cmds.setParent("..")  # frame
-
-    # ===== Mesh List Frame =====
-    cmds.frameLayout(label="Meshes", collapsable=True, collapse=False,
-                     marginWidth=8, marginHeight=8, parent=main_col)
-    col = cmds.columnLayout(adj=True, rowSpacing=4)
-
-    cmds.text(label="Select meshes in viewport, then click 'Add'.", align="left")
-    cmds.rowLayout(numberOfColumns=4, adjustableColumn=1)
+    
+    cmds.setParent("..")
+    cmds.setParent("..")
+    
+    # ===== Mesh 列表 =====
+    cmds.frameLayout(label="Mesh 列表", collapsable=True, collapse=False,
+                     marginWidth=10, marginHeight=8, parent=main_col)
+    cmds.columnLayout(adj=True, rowSpacing=4)
+    
+    cmds.text(label="在视口选择 mesh，点击 '添加'", align="left")
+    cmds.rowLayout(numberOfColumns=2, adjustableColumn=1)
     g_mesh_list = cmds.textScrollList(numberOfRows=4, allowMultiSelection=True)
-    cmds.columnLayout(rowSpacing=2)
-    cmds.button(label="Add", w=60, c=_add_selected_mesh_to_list)
-    cmds.button(label="Remove", w=60, c=lambda *a: _remove_selected_from_list(g_mesh_list))
-    cmds.button(label="Clear", w=60, c=lambda *a: _clear_list(g_mesh_list))
+    cmds.columnLayout(rowSpacing=4)
+    cmds.button(label="添加", w=70, c=_on_add_mesh)
+    cmds.button(label="移除", w=70, c=lambda *a: _on_remove_item(g_mesh_list))
+    cmds.button(label="清空", w=70, c=lambda *a: _on_clear_list(g_mesh_list))
     cmds.setParent("..")
     cmds.setParent("..")
-
-    cmds.setParent("..")  # col
-    cmds.setParent("..")  # frame
-
-    # ===== Joint List Frame =====
-    cmds.frameLayout(label="Joints", collapsable=True, collapse=False,
-                     marginWidth=8, marginHeight=8, parent=main_col)
-    col = cmds.columnLayout(adj=True, rowSpacing=4)
-
-    cmds.text(label="Select joints, then click 'Add' or 'Add Hierarchy'.", align="left")
-    cmds.rowLayout(numberOfColumns=4, adjustableColumn=1)
+    
+    cmds.setParent("..")
+    cmds.setParent("..")
+    
+    # ===== 骨骼列表 =====
+    cmds.frameLayout(label="骨骼列表", collapsable=True, collapse=False,
+                     marginWidth=10, marginHeight=8, parent=main_col)
+    cmds.columnLayout(adj=True, rowSpacing=4)
+    
+    cmds.text(label="选择骨骼，点击 '添加' 或 '层级'", align="left")
+    cmds.rowLayout(numberOfColumns=2, adjustableColumn=1)
     g_joint_list = cmds.textScrollList(numberOfRows=5, allowMultiSelection=True)
-    cmds.columnLayout(rowSpacing=2)
-    cmds.button(label="Add", w=60, c=_add_selected_joints_to_list)
-    cmds.button(label="Hierarchy", w=60, c=_add_joint_hierarchy,
-        ann="Add selected joint and all children")
-    cmds.button(label="Remove", w=60, c=lambda *a: _remove_selected_from_list(g_joint_list))
-    cmds.button(label="Clear", w=60, c=lambda *a: _clear_list(g_joint_list))
+    cmds.columnLayout(rowSpacing=4)
+    cmds.button(label="添加", w=70, c=_on_add_joints)
+    cmds.button(label="层级", w=70, c=_on_add_hierarchy,
+                ann="添加选中骨骼及所有子骨骼")
+    cmds.button(label="移除", w=70, c=lambda *a: _on_remove_item(g_joint_list))
+    cmds.button(label="清空", w=70, c=lambda *a: _on_clear_list(g_joint_list))
     cmds.setParent("..")
     cmds.setParent("..")
-
-    cmds.setParent("..")  # col
-    cmds.setParent("..")  # frame
-
-    # ===== Options Frame =====
-    cmds.frameLayout(label="Options", collapsable=True, collapse=False,
-                     marginWidth=8, marginHeight=8, parent=main_col)
-    col = cmds.columnLayout(adj=True, rowSpacing=6)
-
-    # Prune threshold slider
+    
+    cmds.setParent("..")
+    cmds.setParent("..")
+    
+    # ===== 选项 =====
+    cmds.frameLayout(label="选项", collapsable=True, collapse=False,
+                     marginWidth=10, marginHeight=8, parent=main_col)
+    cmds.columnLayout(adj=True, rowSpacing=8)
+    
     g_prune_slider = cmds.floatSliderGrp(
-        label="Prune Threshold:",
+        label="修剪阈值:",
         field=True,
         minValue=0.0,
         maxValue=0.1,
         fieldMinValue=0.0,
         fieldMaxValue=0.5,
         value=0.01,
-        columnWidth3=(100, 60, 150),
-        ann="Remove weights below this value"
+        columnWidth3=(80, 60, 200),
+        ann="移除低于此值的权重"
     )
-
-    # Max influences
-    cmds.rowLayout(numberOfColumns=3, columnWidth3=(100, 60, 150))
-    cmds.text(label="Max Influences:", width=100, align="right")
+    
+    cmds.rowLayout(numberOfColumns=3, columnWidth3=(80, 60, 200))
+    cmds.text(label="最大影响数:", width=80, align="right")
     g_max_inf_field = cmds.intField(width=60, value=4, minValue=1, maxValue=16)
-    cmds.text(label="(typical: 4 for games, 8 for film)")
+    cmds.text(label="(游戏:4, 影视:8)")
     cmds.setParent("..")
-
-    # Smooth iterations
-    cmds.rowLayout(numberOfColumns=3, columnWidth3=(100, 60, 150))
-    cmds.text(label="Smooth Passes:", width=100, align="right")
+    
+    cmds.rowLayout(numberOfColumns=3, columnWidth3=(80, 60, 200))
+    cmds.text(label="平滑次数:", width=80, align="right")
     g_smooth_iter_field = cmds.intField(width=60, value=1, minValue=0, maxValue=10)
-    cmds.text(label="(0 = no smoothing)")
+    cmds.text(label="(0 = 不平滑)")
     cmds.setParent("..")
-
-    cmds.setParent("..")  # col
-    cmds.setParent("..")  # frame
-
-    # ===== Action Buttons =====
+    
+    cmds.setParent("..")
+    cmds.setParent("..")
+    
+    # ===== 操作按钮 =====
     cmds.separator(h=10, style="none", parent=main_col)
-
-    cmds.rowLayout(numberOfColumns=3, adjustableColumn=1,
-                   columnWidth3=(150, 100, 100), parent=main_col)
-    cmds.button(label="Start Skinning", h=36, bgc=(0.3, 0.5, 0.3),
-                c=_on_start_skinning)
-    cmds.button(label="Fix Weights", h=36, c=_on_fix_weights,
-                ann="Smooth weights on selected vertices")
-    cmds.button(label="Reset Bind", h=36, enable=False,
-                ann="Reset to bind pose (coming soon)")
+    
+    cmds.rowLayout(numberOfColumns=2, adjustableColumn=1,
+                   columnWidth2=(200, 150), parent=main_col)
+    cmds.button(label="开始蒙皮", h=40, bgc=(0.2, 0.5, 0.3), c=_on_start_skinning)
+    cmds.button(label="修复权重", h=40, c=_on_fix_weights,
+                ann="平滑选中顶点的权重")
     cmds.setParent("..")
-
-    # ===== Status =====
+    
+    # ===== 状态 =====
     cmds.separator(h=10, style="in", parent=main_col)
-    g_status_text = cmds.text(label="Ready. Add meshes & joints, then click 'Start Skinning'.",
-                              align="left", parent=main_col)
-
+    g_status_text = cmds.text(
+        label="就绪。添加 mesh 和骨骼，然后点击 '开始蒙皮'。",
+        align="left",
+        parent=main_col
+    )
+    
     cmds.showWindow(win)
 
 
-# Entry point
+# ============================================================================
+# 入口点
+# ============================================================================
+
 if __name__ == "__main__":
     show_auto_skin_window()
