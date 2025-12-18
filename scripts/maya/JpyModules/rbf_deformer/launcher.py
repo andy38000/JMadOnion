@@ -3,23 +3,24 @@
 RBF Deformer Launcher
 启动器脚本
 
+兼容 Maya 2018+ (Python 2.7 / Python 3.x)
+
 在Maya中运行此脚本即可启动RBF换装变形工具
 
 用法:
     # 方法1: 直接导入并运行
-    from JpyModules.rbf_deformer import create_ui
+    from rbf_deformer import create_ui
     create_ui()
     
     # 方法2: 运行启动器
-    from JpyModules.rbf_deformer import launcher
+    from rbf_deformer import launcher
     launcher.run()
-    
-    # 方法3: 在Maya脚本编辑器中运行
-    exec(open('/path/to/launcher.py').read())
 
 Author: Enhanced Version
 Version: 2.0.0
 """
+
+from __future__ import print_function, division, absolute_import
 
 import sys
 import os
@@ -51,9 +52,9 @@ def check_dependencies():
         missing.append('scipy')
     
     if missing:
-        print(f"[错误] 缺少以下依赖项: {', '.join(missing)}")
+        print("[错误] 缺少以下依赖项: {0}".format(', '.join(missing)))
         print("请使用以下命令安装:")
-        print(f"  pip install {' '.join(missing)}")
+        print("  pip install {0}".format(' '.join(missing)))
         return False
     
     return True
@@ -73,14 +74,14 @@ def run():
         from rbf_deformer.rbf_deformer_v2 import create_ui
         return create_ui()
     except ImportError as e:
-        print(f"[错误] 导入失败: {e}")
+        print("[错误] 导入失败: {0}".format(e))
         
         # 尝试相对导入
         try:
             from .rbf_deformer_v2 import create_ui
             return create_ui()
         except ImportError as e2:
-            print(f"[错误] 相对导入也失败: {e2}")
+            print("[错误] 相对导入也失败: {0}".format(e2))
             return None
 
 
@@ -113,9 +114,10 @@ def run_with_auto_params():
                 if params:
                     cmds.floatSliderGrp("radiusSlider", e=True, value=params['radius'])
                     cmds.intSliderGrp("pointsSlider", e=True, value=params['max_points'])
-                    print(f"[自动检测] 推荐半径: {params['radius']:.2f}, 采样点数: {params['max_points']}")
+                    print("[自动检测] 推荐半径: {0:.2f}, 采样点数: {1}".format(
+                        params['radius'], params['max_points']))
             except Exception as e:
-                print(f"[警告] 自动检测参数失败: {e}")
+                print("[警告] 自动检测参数失败: {0}".format(e))
     
     return window
 

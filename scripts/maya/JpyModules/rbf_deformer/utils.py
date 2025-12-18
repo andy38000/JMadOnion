@@ -3,9 +3,13 @@
 RBF Deformer Utilities
 工具函数模块
 
+兼容 Maya 2018+ (Python 2.7 / Python 3.x)
+
 Author: Enhanced Version
 Version: 2.0.0
 """
+
+from __future__ import print_function, division, absolute_import
 
 import numpy as np
 from maya import cmds
@@ -242,13 +246,13 @@ def create_deformation_heatmap(original_mesh, deformed_mesh):
     # 应用顶点颜色
     for i, color in enumerate(colors):
         cmds.polyColorPerVertex(
-            f"{deformed_mesh}.vtx[{i}]",
+            "{0}.vtx[{1}]".format(deformed_mesh, i),
             rgb=color,
             colorDisplayOption=True
         )
     
     # 启用顶点颜色显示
-    cmds.setAttr(f"{deformed_mesh}.displayColors", 1)
+    cmds.setAttr("{0}.displayColors".format(deformed_mesh), 1)
     
     return {
         'min_distance': float(distances.min()),
@@ -278,7 +282,7 @@ def batch_export_deformed_meshes(meshes, output_dir, format='obj'):
         cmds.select(mesh, replace=True)
         
         # 构建输出路径
-        output_path = os.path.join(output_dir, f"{mesh}.{format}")
+        output_path = os.path.join(output_dir, "{0}.{1}".format(mesh, format))
         
         # 导出
         if format == 'obj':
@@ -288,7 +292,7 @@ def batch_export_deformed_meshes(meshes, output_dir, format='obj'):
         elif format == 'ma':
             cmds.file(output_path, force=True, exportSelected=True, type='mayaAscii')
         
-        print(f"导出完成: {output_path}")
+        print("导出完成: {0}".format(output_path))
 
 
 def transfer_uv_with_deformation(source_mesh, target_mesh, deformed_mesh):
@@ -410,16 +414,16 @@ class DeformationAnalyzer:
         locators = []
         
         for idx in vertex_indices[:50]:  # 最多显示50个
-            pos = cmds.pointPosition(f"{mesh}.vtx[{idx}]", world=True)
-            loc = cmds.spaceLocator(name=f"{mesh}_problem_vtx_{idx}")[0]
-            cmds.setAttr(f"{loc}.translate", *pos)
-            cmds.setAttr(f"{loc}.overrideEnabled", 1)
-            cmds.setAttr(f"{loc}.overrideColor", 13)  # 红色
+            pos = cmds.pointPosition("{0}.vtx[{1}]".format(mesh, idx), world=True)
+            loc = cmds.spaceLocator(name="{0}_problem_vtx_{1}".format(mesh, idx))[0]
+            cmds.setAttr("{0}.translate".format(loc), *pos)
+            cmds.setAttr("{0}.overrideEnabled".format(loc), 1)
+            cmds.setAttr("{0}.overrideColor".format(loc), 13)  # 红色
             locators.append(loc)
         
         # 组织到一个组里
         if locators:
-            group = cmds.group(locators, name=f"{mesh}_problem_vertices_grp")
+            group = cmds.group(locators, name="{0}_problem_vertices_grp".format(mesh))
             return group
         
         return None

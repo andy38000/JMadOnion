@@ -2,8 +2,10 @@
 """
 RBF Deformer Tool v2.0 - 优化版RBF换装变形工具
 
+兼容 Maya 2018+ (Python 2.7 / Python 3.x)
+
 功能特性:
-- 5种RBF核函数支持
+- 8种RBF核函数支持
 - OpenMaya 2.0 API高性能实现
 - 进度条显示
 - 撤销支持
@@ -18,6 +20,8 @@ RBF Deformer Tool v2.0 - 优化版RBF换装变形工具
 Author: Enhanced Version
 Version: 2.0.0
 """
+
+from __future__ import print_function, division, absolute_import
 
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -154,7 +158,7 @@ def timer_decorator(func):
         start = time.time()
         result = func(*args, **kwargs)
         end = time.time()
-        print(f"[Timer] {func.__name__}: {end - start:.3f}s")
+        print("[Timer] {0}: {1:.3f}s".format(func.__name__, end - start))
         return result
     return wrapper
 
@@ -352,7 +356,7 @@ class VertexSampler:
             # 获取顶点连接信息
             for i in range(total):
                 neighbors = cmds.polyListComponentConversion(
-                    f"{mesh_name}.vtx[{i}]", toVertex=True, fromVertex=True)
+                    "{0}.vtx[{1}]".format(mesh_name, i), toVertex=True, fromVertex=True)
                 neighbors = cmds.filterExpand(neighbors, sm=31) or []
                 
                 if len(neighbors) > 1:
@@ -376,7 +380,7 @@ class VertexSampler:
             return vertices[indices], indices
             
         except Exception as e:
-            print(f"[Warning] 曲率采样失败，回退到均匀采样: {e}")
+            print("[Warning] 曲率采样失败，回退到均匀采样: {0}".format(e))
             return VertexSampler.uniform_sampling(vertices, max_points)
     
     @staticmethod
@@ -459,7 +463,7 @@ class BoundaryDetector:
             num_edges = cmds.polyEvaluate(mesh_name, edge=True)
             
             for i in range(num_edges):
-                edge = f"{mesh_name}.e[{i}]"
+                edge = "{0}.e[{1}]".format(mesh_name, i)
                 # 检查边是否为边界边（只连接一个面）
                 faces = cmds.polyListComponentConversion(edge, toFace=True)
                 faces = cmds.filterExpand(faces, sm=34) or []
@@ -472,7 +476,7 @@ class BoundaryDetector:
                         boundary_verts.add(idx)
         
         except Exception as e:
-            print(f"[Warning] 边界检测失败: {e}")
+            print("[Warning] 边界检测失败: {0}".format(e))
         
         return list(boundary_verts)
     
@@ -671,8 +675,8 @@ class PresetManager:
                 return None
             file_path = result[0]
         
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(preset_data, f, indent=2, ensure_ascii=False)
+        with open(file_path, 'w') as f:
+            json.dump(preset_data, f, indent=2)
         
         return file_path
     
@@ -698,7 +702,7 @@ class PresetManager:
                 return None
             file_path = result[0]
         
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r') as f:
             return json.load(f)
     
     @staticmethod
@@ -754,7 +758,7 @@ class UICallbacks:
     def log_message(message):
         """记录日志消息"""
         timestamp = time.strftime("%H:%M:%S")
-        full_message = f"[{timestamp}] {message}"
+        full_message = "[{0}] {1}".format(timestamp, message)
         cmds.textScrollList("logList", e=True, append=full_message)
         cmds.textScrollList("logList", e=True, showIndexedItem=cmds.textScrollList("logList", q=True, numberOfItems=True))
         print(full_message)
@@ -769,7 +773,7 @@ class UICallbacks:
             if shapes:
                 cmds.textFieldButtonGrp("sourceModelField", e=True, text=selected[0])
                 vertex_count = MeshVertexOperator.get_vertex_count(selected[0])
-                UICallbacks.log_message(f"原始模型已加载: {selected[0]} ({vertex_count} 顶点)")
+                UICallbacks.log_message("原始模型已加载: {0} ({1} 顶点)".format(selected[0], vertex_count))
             else:
                 UICallbacks.log_message("错误：所选对象不是网格！")
                 cmds.warning("所选对象不是网格！")
@@ -786,7 +790,7 @@ class UICallbacks:
             if shapes:
                 cmds.textFieldButtonGrp("targetModelField", e=True, text=selected[0])
                 vertex_count = MeshVertexOperator.get_vertex_count(selected[0])
-                UICallbacks.log_message(f"换装模型已加载: {selected[0]} ({vertex_count} 顶点)")
+                UICallbacks.log_message("换装模型已加载: {0} ({1} 顶点)".format(selected[0], vertex_count))
             else:
                 UICallbacks.log_message("错误：所选对象不是网格！")
                 cmds.warning("所选对象不是网格！")
@@ -809,7 +813,7 @@ class UICallbacks:
             cmds.textScrollList("batchModelList", e=True, removeAll=True)
             for model in valid_meshes:
                 cmds.textScrollList("batchModelList", e=True, append=model)
-            UICallbacks.log_message(f"批量换装模型已加载: {len(valid_meshes)} 个模型")
+            UICallbacks.log_message("批量换装模型已加载: {0} 个模型".format(len(valid_meshes)))
         else:
             UICallbacks.log_message("错误：请先选择至少一个有效的网格模型！")
             cmds.warning("请先选择至少一个有效的网格模型！")
@@ -827,7 +831,7 @@ class UICallbacks:
         if selected:
             for item in selected:
                 cmds.textScrollList("batchModelList", e=True, removeItem=item)
-            UICallbacks.log_message(f"已移除 {len(selected)} 个模型")
+            UICallbacks.log_message("已移除 {0} 个模型".format(len(selected)))
     
     @staticmethod
     def clear_log(*args):
@@ -840,7 +844,7 @@ class UICallbacks:
         settings = PresetManager.get_current_settings()
         file_path = PresetManager.save_preset(settings)
         if file_path:
-            UICallbacks.log_message(f"预设已保存: {file_path}")
+            UICallbacks.log_message("预设已保存: {0}".format(file_path))
     
     @staticmethod
     def load_preset(*args):
@@ -889,12 +893,12 @@ class UICallbacks:
         # 创建预览副本
         preview_meshes = []
         for mesh in batch_meshes:
-            preview = cmds.duplicate(mesh, name=f"{mesh}_RBF_preview")[0]
+            preview = cmds.duplicate(mesh, name="{0}_RBF_preview".format(mesh))[0]
             preview_meshes.append(preview)
             
             # 设置预览材质（半透明绿色）
-            cmds.setAttr(f"{preview}.overrideEnabled", 1)
-            cmds.setAttr(f"{preview}.overrideColor", 14)  # 绿色
+            cmds.setAttr("{0}.overrideEnabled".format(preview), 1)
+            cmds.setAttr("{0}.overrideColor".format(preview), 14)  # 绿色
         
         UICallbacks._preview_meshes = preview_meshes
         
@@ -911,7 +915,7 @@ class UICallbacks:
         for mesh in batch_meshes:
             cmds.textScrollList("batchModelList", e=True, append=mesh)
         
-        UICallbacks.log_message(f"预览模型已创建: {len(preview_meshes)} 个")
+        UICallbacks.log_message("预览模型已创建: {0} 个".format(len(preview_meshes)))
     
     @staticmethod
     def apply_preview_to_mesh(*args):
@@ -941,7 +945,7 @@ class UICallbacks:
             UICallbacks.delete_preview()
             
         except Exception as e:
-            UICallbacks.log_message(f"错误：应用预览失败 - {str(e)}")
+            UICallbacks.log_message("错误：应用预览失败 - {0}".format(str(e)))
         finally:
             cmds.undoInfo(closeChunk=True)
     
@@ -961,10 +965,10 @@ class UICallbacks:
         try:
             for mesh in batch_meshes:
                 # 复制原始模型作为基础形状
-                base = cmds.duplicate(mesh, name=f"{mesh}_base")[0]
+                base = cmds.duplicate(mesh, name="{0}_base".format(mesh))[0]
                 
                 # 复制并变形作为目标形状
-                target = cmds.duplicate(mesh, name=f"{mesh}_rbf_target")[0]
+                target = cmds.duplicate(mesh, name="{0}_rbf_target".format(mesh))[0]
                 
                 # 临时设置批量模型为目标
                 cmds.textScrollList("batchModelList", e=True, removeAll=True)
@@ -974,12 +978,12 @@ class UICallbacks:
                 UICallbacks.apply_deformation(silent=True)
                 
                 # 创建BlendShape
-                bs = cmds.blendShape(target, base, name=f"{mesh}_blendShape")[0]
+                bs = cmds.blendShape(target, base, name="{0}_blendShape".format(mesh))[0]
                 
                 # 设置权重为1
-                cmds.setAttr(f"{bs}.{target}", 1)
+                cmds.setAttr("{0}.{1}".format(bs, target), 1)
                 
-                UICallbacks.log_message(f"BlendShape已创建: {bs}")
+                UICallbacks.log_message("BlendShape已创建: {0}".format(bs))
                 
                 # 清理目标形状
                 cmds.delete(target)
@@ -992,13 +996,16 @@ class UICallbacks:
             UICallbacks.log_message("所有BlendShape创建完成")
             
         except Exception as e:
-            UICallbacks.log_message(f"错误：创建BlendShape失败 - {str(e)}")
+            UICallbacks.log_message("错误：创建BlendShape失败 - {0}".format(str(e)))
         finally:
             cmds.undoInfo(closeChunk=True)
     
     @staticmethod
-    def apply_deformation(*args, is_preview=False, silent=False):
+    def apply_deformation(*args, **kwargs):
         """执行变形"""
+        is_preview = kwargs.get('is_preview', False)
+        silent = kwargs.get('silent', False)
+        
         # 获取UI参数
         source_mesh = cmds.textFieldButtonGrp("sourceModelField", q=True, text=True)
         target_mesh = cmds.textFieldButtonGrp("targetModelField", q=True, text=True)
@@ -1014,17 +1021,17 @@ class UICallbacks:
         enable_undo = cmds.checkBox("undoSupportCheck", q=True, value=True)
         
         # 获取采样方法
-        sampling_map = {v: k for k, v in SAMPLING_METHODS.items()}
+        sampling_map = dict((v, k) for k, v in SAMPLING_METHODS.items())
         sampling_method = sampling_map.get(sampling_method_label, "uniform")
         
         # 验证输入
         if not source_mesh or not cmds.objExists(source_mesh):
             if not silent:
-                UICallbacks.log_message(f"错误：原始模型 {source_mesh} 不存在！")
+                UICallbacks.log_message("错误：原始模型 {0} 不存在！".format(source_mesh))
             return
         if not target_mesh or not cmds.objExists(target_mesh):
             if not silent:
-                UICallbacks.log_message(f"错误：换装模型 {target_mesh} 不存在！")
+                UICallbacks.log_message("错误：换装模型 {0} 不存在！".format(target_mesh))
             return
         if not batch_meshes:
             if not silent:
@@ -1034,14 +1041,14 @@ class UICallbacks:
         # 验证RBF方法
         if rbf_method not in RBF_METHODS:
             if not silent:
-                UICallbacks.log_message(f"错误：未知的RBF方法 {rbf_method}")
+                UICallbacks.log_message("错误：未知的RBF方法 {0}".format(rbf_method))
             return
         
         if not silent:
-            UICallbacks.log_message(f"开始变形处理...")
-            UICallbacks.log_message(f"  RBF方法: {rbf_method}")
-            UICallbacks.log_message(f"  半径: {radius}, 采样点数: {max_points}")
-            UICallbacks.log_message(f"  采样方法: {sampling_method_label}")
+            UICallbacks.log_message("开始变形处理...")
+            UICallbacks.log_message("  RBF方法: {0}".format(rbf_method))
+            UICallbacks.log_message("  半径: {0}, 采样点数: {1}".format(radius, max_points))
+            UICallbacks.log_message("  采样方法: {0}".format(sampling_method_label))
         
         # 开启撤销块
         if enable_undo and not is_preview:
@@ -1073,11 +1080,12 @@ class UICallbacks:
             # 检查采样点数是否匹配
             if len(source_sampled) != len(target_sampled):
                 if not silent:
-                    UICallbacks.log_message(f"错误：采样点数不匹配！源: {len(source_sampled)}, 目标: {len(target_sampled)}")
+                    UICallbacks.log_message("错误：采样点数不匹配！源: {0}, 目标: {1}".format(
+                        len(source_sampled), len(target_sampled)))
                 return
             
             if not silent:
-                UICallbacks.log_message(f"  采样点数: {len(source_sampled)}")
+                UICallbacks.log_message("  采样点数: {0}".format(len(source_sampled)))
             
             # 计算RBF权重
             if not silent:
@@ -1110,12 +1118,12 @@ class UICallbacks:
                         break
                     
                     # 更新进度
-                    progress = int((i / total) * 100)
-                    cmds.progressWindow(e=True, progress=progress, status=f'处理: {mesh}')
+                    progress = int((i / float(total)) * 100)
+                    cmds.progressWindow(e=True, progress=progress, status='处理: {0}'.format(mesh))
                     
                     if not cmds.objExists(mesh):
                         if not silent:
-                            UICallbacks.log_message(f"  警告：模型 {mesh} 不存在，跳过")
+                            UICallbacks.log_message("  警告：模型 {0} 不存在，跳过".format(mesh))
                         continue
                     
                     # 获取边界顶点
@@ -1140,7 +1148,7 @@ class UICallbacks:
                     MeshVertexOperator.set_all_vertices(mesh, deformed_vertices)
                     
                     if not silent:
-                        UICallbacks.log_message(f"  模型 {mesh} 处理完成")
+                        UICallbacks.log_message("  模型 {0} 处理完成".format(mesh))
                 
                 # 完成进度条
                 cmds.progressWindow(e=True, progress=100, status='完成')
@@ -1150,11 +1158,11 @@ class UICallbacks:
             
             elapsed = time.time() - start_time
             if not silent:
-                UICallbacks.log_message(f"变形处理完成！耗时: {elapsed:.2f}秒")
+                UICallbacks.log_message("变形处理完成！耗时: {0:.2f}秒".format(elapsed))
         
         except Exception as e:
             if not silent:
-                UICallbacks.log_message(f"错误：变形处理失败 - {str(e)}")
+                UICallbacks.log_message("错误：变形处理失败 - {0}".format(str(e)))
             import traceback
             traceback.print_exc()
         
@@ -1391,7 +1399,7 @@ def create_ui():
 3. 加载需要应用变形的批量模型
 4. 调整RBF参数:
    - 半径: 控制变形影响范围，越大越平滑
-   - 采样点数: 越多效果越好，但速度越慢
+   - 采样点数: 越多越精确，但速度越慢
 5. 点击"创建预览"查看效果，满意后"应用预览"
 6. 或直接点击"执行变形"
 
@@ -1417,7 +1425,7 @@ RBF方法说明:
     
     # 初始化日志
     UICallbacks.log_message("RBF换装变形工具 v2.0 已启动")
-    UICallbacks.log_message(f"OpenMaya API版本: {'2.0' if USE_OM2 else '1.0'}")
+    UICallbacks.log_message("OpenMaya API版本: {0}".format('2.0' if USE_OM2 else '1.0'))
     
     return window
 

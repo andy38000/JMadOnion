@@ -3,6 +3,8 @@
 RBF Deformer Package
 RBF变形工具包
 
+兼容 Maya 2018+ (Python 2.7 / Python 3.x)
+
 特性:
 - 8种RBF核函数
 - OpenMaya 2.0 高性能API
@@ -17,6 +19,8 @@ RBF变形工具包
 Author: Enhanced Version
 Version: 2.0.0
 """
+
+from __future__ import print_function, division, absolute_import
 
 from .rbf_deformer_v2 import (
     create_ui,
