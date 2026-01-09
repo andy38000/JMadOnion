@@ -671,7 +671,6 @@ def copy_skin_weights_single(source, target, options):
     
     # Get options with defaults
     algorithm = options.get('algorithm', 'closestPoint')
-    surface_assoc = options.get('surface_association', 'closestPoint')
     influence_assoc = options.get('influence_association', 'name')
     do_prune = options.get('do_prune', True)
     prune_value = options.get('prune_value', 0.001)
@@ -683,41 +682,40 @@ def copy_skin_weights_single(source, target, options):
     relax_factor = options.get('relax_factor', 0.3)
     num_samples = options.get('num_samples', 5)
     
+    # Maya built-in surface association algorithms
+    MAYA_ALGORITHMS = ['rayCast', 'closestPoint', 'closestComponent', 'uvSpace']
+    
     try:
         success = False
         
-        # Select algorithm
+        # Advanced algorithms
         if algorithm == 'vertexOrder':
             success = copy_weights_vertex_order(source, target)
             if not success:
                 print("Vertex order failed, falling back to closestPoint")
                 algorithm = 'closestPoint'
         
-        if algorithm == 'barycentric':
+        elif algorithm == 'barycentric':
             success = copy_weights_barycentric(source, target)
             if not success:
                 print("Barycentric failed, falling back to closestPoint")
                 algorithm = 'closestPoint'
         
-        if algorithm == 'multiSample':
+        elif algorithm == 'multiSample':
             success = copy_weights_multi_sample(source, target, num_samples=num_samples)
             if not success:
                 print("Multi-sample failed, falling back to closestPoint")
                 algorithm = 'closestPoint'
         
-        # Maya built-in algorithms
-        if algorithm in ['rayCast', 'closestPoint', 'closestComponent', 'uvSpace']:
-            inf_assoc_flags = []
-            if influence_assoc == 'name':
-                inf_assoc_flags = ['name', 'oneToOne']
-            else:
-                inf_assoc_flags = ['closestJoint', 'oneToOne']
+        # Maya built-in algorithms (algorithm = surface association)
+        if algorithm in MAYA_ALGORITHMS:
+            inf_assoc_flags = ['name', 'oneToOne'] if influence_assoc == 'name' else ['closestJoint', 'oneToOne']
             
             cmds.copySkinWeights(
                 sourceSkin=sc_source,
                 destinationSkin=sc_target,
                 noMirror=True,
-                surfaceAssociation=surface_assoc if algorithm in ['rayCast', 'closestPoint', 'closestComponent', 'uvSpace'] else 'closestPoint',
+                surfaceAssociation=algorithm,
                 influenceAssociation=inf_assoc_flags
             )
             success = True
@@ -810,7 +808,6 @@ class TAG2CopySkinWeightsUI(object):
     UI_LIST_SOURCE = "TAG2_copyListSource"
     UI_LIST_TARGET = "TAG2_copyListTarget"
     UI_MENU_ALGORITHM = "TAG2_algorithmMenu"
-    UI_MENU_SURFACE_ASSOC = "TAG2_surfaceAssocMenu"
     UI_MENU_INFLUENCE_ASSOC = "TAG2_influenceAssocMenu"
     UI_CB_PRUNE = "TAG2_doPruneCB"
     UI_FF_PRUNE = "TAG2_pruneValueFF"
@@ -897,43 +894,35 @@ class TAG2CopySkinWeightsUI(object):
         
         cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
         
-        # Algorithm selection (NEW)
+        # Algorithm selection (unified)
         cmds.rowLayout(numberOfColumns=2, columnWidth2=(120, 200))
         cmds.text(label="Algorithm:")
         cmds.optionMenu(self.UI_MENU_ALGORITHM, changeCommand=self._on_algorithm_changed)
-        cmds.menuItem(label="closestPoint (Maya)")
-        cmds.menuItem(label="rayCast (Maya)")
-        cmds.menuItem(label="closestComponent (Maya)")
-        cmds.menuItem(label="uvSpace (Maya)")
-        cmds.menuItem(label="barycentric (Advanced)")
-        cmds.menuItem(label="multiSample (Advanced)")
-        cmds.menuItem(label="vertexOrder (Fastest)")
+        cmds.menuItem(label="closestPoint", ann="Maya built-in: find nearest surface point")
+        cmds.menuItem(label="rayCast", ann="Maya built-in: ray cast along normal")
+        cmds.menuItem(label="closestComponent", ann="Maya built-in: find nearest vertex")
+        cmds.menuItem(label="uvSpace", ann="Maya built-in: match by UV coordinates")
+        cmds.menuItem(divider=True, dividerLabel="Advanced")
+        cmds.menuItem(label="barycentric", ann="Triangle interpolation - most accurate")
+        cmds.menuItem(label="multiSample", ann="Multi-point averaging - smoothest")
+        cmds.menuItem(label="vertexOrder", ann="Direct vertex mapping - fastest (same topology)")
         cmds.setParent('..')
         
-        # Multi-sample count (NEW)
+        # Multi-sample count (only for multiSample algorithm)
         cmds.rowLayout(numberOfColumns=2, columnWidth2=(120, 200))
         cmds.text(label="Sample Count:")
-        cmds.intField(self.UI_IF_SAMPLES, value=5, minValue=3, maxValue=20, enable=False)
+        cmds.intField(self.UI_IF_SAMPLES, value=5, minValue=3, maxValue=20, enable=False,
+                      ann="Number of nearest vertices to sample (for multiSample only)")
         cmds.setParent('..')
         
         cmds.separator(height=6)
-        
-        # Surface Association (for Maya algorithms)
-        cmds.rowLayout(numberOfColumns=2, columnWidth2=(120, 200))
-        cmds.text(label="Surface Assoc:")
-        cmds.optionMenu(self.UI_MENU_SURFACE_ASSOC)
-        cmds.menuItem(label="closestPoint")
-        cmds.menuItem(label="rayCast")
-        cmds.menuItem(label="closestComponent")
-        cmds.menuItem(label="uvSpace")
-        cmds.setParent('..')
         
         # Influence Association
         cmds.rowLayout(numberOfColumns=2, columnWidth2=(120, 200))
         cmds.text(label="Influence Assoc:")
         cmds.optionMenu(self.UI_MENU_INFLUENCE_ASSOC)
-        cmds.menuItem(label="name (oneToOne)")
-        cmds.menuItem(label="closestJoint (oneToOne)")
+        cmds.menuItem(label="name", ann="Match influences by name")
+        cmds.menuItem(label="closestJoint", ann="Match influences by position (for mirrored rigs)")
         cmds.setParent('..')
         
         cmds.separator(height=6)
@@ -984,17 +973,18 @@ class TAG2CopySkinWeightsUI(object):
         # Tips
         cmds.separator(style='in', height=8)
         
-        cmds.frameLayout(label="Algorithm Info", collapsable=True, collapse=True, marginWidth=4, marginHeight=4)
+        cmds.frameLayout(label="Algorithm Guide", collapsable=True, collapse=True, marginWidth=4, marginHeight=4)
         cmds.columnLayout(adjustableColumn=True)
         cmds.text(label="Maya Built-in:", font="boldLabelFont", align="left")
-        cmds.text(label="  closestPoint - General purpose", align="left")
-        cmds.text(label="  rayCast - Best for surface attachments", align="left")
-        cmds.text(label="  uvSpace - Requires matching UVs", align="left")
-        cmds.text(label="", height=4)
+        cmds.text(label="  closestPoint - General purpose (default)", align="left")
+        cmds.text(label="  rayCast - Surface attachments (clothes)", align="left")
+        cmds.text(label="  closestComponent - Nearest vertex match", align="left")
+        cmds.text(label="  uvSpace - Requires identical UVs", align="left")
+        cmds.text(label="", height=6)
         cmds.text(label="Advanced:", font="boldLabelFont", align="left")
-        cmds.text(label="  barycentric - Most accurate interpolation", align="left")
-        cmds.text(label="  multiSample - Smoothest results", align="left")
-        cmds.text(label="  vertexOrder - Fastest (same topology)", align="left")
+        cmds.text(label="  barycentric - Triangle interpolation (accurate)", align="left")
+        cmds.text(label="  multiSample - N-point averaging (smooth)", align="left")
+        cmds.text(label="  vertexOrder - Direct copy (same topology)", align="left")
         cmds.setParent('..')
         cmds.setParent('..')
         
@@ -1011,7 +1001,6 @@ class TAG2CopySkinWeightsUI(object):
         """Get current options from UI controls."""
         options = {
             'algorithm': 'closestPoint',
-            'surface_association': 'closestPoint',
             'influence_association': 'name',
             'do_prune': True,
             'prune_value': 0.001,
@@ -1024,37 +1013,15 @@ class TAG2CopySkinWeightsUI(object):
             'num_samples': 5
         }
         
-        # Algorithm
+        # Algorithm (unified - no separate surface_association needed)
         if cmds.optionMenu(self.UI_MENU_ALGORITHM, exists=True):
-            algo_label = cmds.optionMenu(self.UI_MENU_ALGORITHM, query=True, value=True)
-            if 'barycentric' in algo_label:
-                options['algorithm'] = 'barycentric'
-            elif 'multiSample' in algo_label:
-                options['algorithm'] = 'multiSample'
-            elif 'vertexOrder' in algo_label:
-                options['algorithm'] = 'vertexOrder'
-            elif 'rayCast' in algo_label:
-                options['algorithm'] = 'rayCast'
-            elif 'closestComponent' in algo_label:
-                options['algorithm'] = 'closestComponent'
-            elif 'uvSpace' in algo_label:
-                options['algorithm'] = 'uvSpace'
-            else:
-                options['algorithm'] = 'closestPoint'
-        
-        # Surface association
-        if cmds.optionMenu(self.UI_MENU_SURFACE_ASSOC, exists=True):
-            options['surface_association'] = cmds.optionMenu(
-                self.UI_MENU_SURFACE_ASSOC, query=True, value=True
-            )
+            options['algorithm'] = cmds.optionMenu(self.UI_MENU_ALGORITHM, query=True, value=True)
         
         # Influence association
         if cmds.optionMenu(self.UI_MENU_INFLUENCE_ASSOC, exists=True):
-            value = cmds.optionMenu(self.UI_MENU_INFLUENCE_ASSOC, query=True, value=True)
-            if 'closestJoint' in value:
-                options['influence_association'] = 'closestJoint'
-            else:
-                options['influence_association'] = 'name'
+            options['influence_association'] = cmds.optionMenu(
+                self.UI_MENU_INFLUENCE_ASSOC, query=True, value=True
+            )
         
         # Prune
         if cmds.checkBox(self.UI_CB_PRUNE, exists=True):
@@ -1286,9 +1253,10 @@ def copy_weights(source, target, **kwargs):
         source (str): Source mesh name
         target (str): Target mesh name
         **kwargs: Optional arguments:
-            - algorithm (str): 'closestPoint', 'rayCast', 'barycentric', 'multiSample', 'vertexOrder'
-            - surface_association (str): 'rayCast', 'closestPoint', 'closestComponent', 'uvSpace'
-            - influence_association (str): 'name', 'closestJoint'
+            - algorithm (str): Weight transfer algorithm
+                Maya built-in: 'closestPoint', 'rayCast', 'closestComponent', 'uvSpace'
+                Advanced: 'barycentric', 'multiSample', 'vertexOrder'
+            - influence_association (str): 'name' or 'closestJoint'
             - do_prune (bool): Prune small weights
             - prune_value (float): Prune threshold
             - do_max_influences (bool): Enforce max influences
@@ -1310,7 +1278,6 @@ def copy_weights(source, target, **kwargs):
     """
     options = {
         'algorithm': kwargs.get('algorithm', 'closestPoint'),
-        'surface_association': kwargs.get('surface_association', 'closestPoint'),
         'influence_association': kwargs.get('influence_association', 'name'),
         'do_prune': kwargs.get('do_prune', True),
         'prune_value': kwargs.get('prune_value', 0.001),
@@ -1340,7 +1307,6 @@ def copy_weights_batch(sources, targets, **kwargs):
     """
     options = {
         'algorithm': kwargs.get('algorithm', 'closestPoint'),
-        'surface_association': kwargs.get('surface_association', 'closestPoint'),
         'influence_association': kwargs.get('influence_association', 'name'),
         'do_prune': kwargs.get('do_prune', True),
         'prune_value': kwargs.get('prune_value', 0.001),
