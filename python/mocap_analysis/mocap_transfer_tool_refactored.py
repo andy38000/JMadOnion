@@ -4,16 +4,13 @@
 Mocap Data Transfer Tool for Maya
 将动作捕捉数据从骨骼传递到控制器
 
-重构版本 - 修复了原代码中的以下问题:
-1. 使用类封装替代全局变量
-2. 使用functools.partial替代字符串回调
-3. 添加错误处理
-4. 统一命名规范
-5. 提取重复代码为通用函数
-6. 添加配置管理
-7. 添加文档字符串
+功能:
+- 映射关系管理（导入/导出/预设）
+- 骨骼姿态设置
+- 约束连接（可选旋转/位移）
+- 动画烘焙
 
-Author: Refactored Version
+兼容: Maya Python 2.7 / Python 3
 """
 
 from __future__ import print_function, division
@@ -30,16 +27,26 @@ from maya import cmds
 # ============================================================================
 
 class MocapConfig:
-    """配置管理类 - 集中管理路径和常量"""
+    """配置管理类"""
     
-    # 可通过环境变量覆盖默认路径
+    # 网络预设路径（原有）
     RIG_TOOLS_ROOT = os.environ.get('RIG_TOOLS_ROOT', 'Z:/RigTools')
     JOINT_LOC_DIR = os.path.join(RIG_TOOLS_ROOT, '007-动作工具', 'JointLocFile')
     
-    # 预设配置
-    PRESETS = {
+    # 本地预设路径（用户目录下）
+    USER_PRESET_DIR = os.path.join(
+        os.environ.get('MAYA_APP_DIR', os.path.expanduser('~/maya')),
+        'mocap_presets'
+    )
+    
+    # 内置预设
+    BUILTIN_PRESETS = {
         'J1Mapping1': 'J1Mapping1.json',
         'J5Mapping': 'J5Mapping.json',
+    }
+    
+    # 角色化预设
+    CHARACTERIZE_PRESETS = {
         'J1_jointsLoc': 'J1_jointsLoc.json',
         'J5lu': 'J5lu.json',
         'UE4Lydia_jointDeta': 'UE4Lydia_jointDeta.json',
@@ -64,17 +71,43 @@ class MocapConfig:
         'RightUpperLeg', 'RightLowerLeg', 'RightFoot', 'RightToe'
     ]
     
-    # FK/IK切换控制器
     FKIK_SWITCHES = ['FKIKArm_R', 'FKIKArm_L', 'FKIKSpine_M', 'FKIKLeg_R', 'FKIKLeg_L']
-    
-    # Roll骨骼列表
     ROLL_JOINTS = ['RightUpperArmRoll', 'LeftUpperArmRoll']
     
     @classmethod
-    def get_preset_path(cls, preset_name):
-        """获取预设文件的完整路径"""
-        filename = cls.PRESETS.get(preset_name, '{}.json'.format(preset_name))
+    def get_builtin_preset_path(cls, preset_name):
+        """获取内置预设路径"""
+        filename = cls.BUILTIN_PRESETS.get(preset_name, '{}.json'.format(preset_name))
         return os.path.join(cls.JOINT_LOC_DIR, filename)
+    
+    @classmethod
+    def get_characterize_path(cls, preset_name):
+        """获取角色化预设路径"""
+        filename = cls.CHARACTERIZE_PRESETS.get(preset_name, '{}.json'.format(preset_name))
+        return os.path.join(cls.JOINT_LOC_DIR, filename)
+    
+    @classmethod
+    def get_user_preset_dir(cls):
+        """获取用户预设目录，不存在则创建"""
+        if not os.path.exists(cls.USER_PRESET_DIR):
+            os.makedirs(cls.USER_PRESET_DIR)
+        return cls.USER_PRESET_DIR
+    
+    @classmethod
+    def get_user_preset_path(cls, preset_name):
+        """获取用户预设路径"""
+        return os.path.join(cls.get_user_preset_dir(), '{}.json'.format(preset_name))
+    
+    @classmethod
+    def list_user_presets(cls):
+        """列出所有用户预设"""
+        preset_dir = cls.get_user_preset_dir()
+        presets = []
+        if os.path.exists(preset_dir):
+            for f in os.listdir(preset_dir):
+                if f.endswith('.json'):
+                    presets.append(f[:-5])  # 移除 .json 后缀
+        return sorted(presets)
 
 
 # ============================================================================
@@ -82,15 +115,9 @@ class MocapConfig:
 # ============================================================================
 
 def set_transform(node, transform_data):
-    """
-    设置节点的位移和旋转属性
-    
-    Args:
-        node: Maya节点名称
-        transform_data: 包含6个值的序列 (tx, ty, tz, rx, ry, rz)
-    """
+    """设置节点的位移和旋转属性"""
     if len(transform_data) != 6:
-        raise ValueError("Transform data must have 6 values (tx, ty, tz, rx, ry, rz)")
+        raise ValueError("Transform data must have 6 values")
     
     attrs = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
     for attr, value in zip(attrs, transform_data):
@@ -101,44 +128,20 @@ def set_transform(node, transform_data):
 
 
 def get_transform(node):
-    """
-    获取节点的位移和旋转属性
-    
-    Args:
-        node: Maya节点名称
-        
-    Returns:
-        tuple: (tx, ty, tz, rx, ry, rz)
-    """
+    """获取节点的位移和旋转属性"""
     attrs = ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']
     return tuple(cmds.getAttr('{}.{}'.format(node, attr)) for attr in attrs)
 
 
 def get_namespace_from_object(obj_name):
-    """
-    从对象名称提取命名空间
-    
-    Args:
-        obj_name: 对象名称
-        
-    Returns:
-        str: 命名空间（包含冒号）或空字符串
-    """
+    """从对象名称提取命名空间"""
     if ':' in obj_name:
         return obj_name.rsplit(':', 1)[0] + ':'
     return ''
 
 
 def load_json_file(filepath):
-    """
-    安全加载JSON文件
-    
-    Args:
-        filepath: 文件路径
-        
-    Returns:
-        dict: 解析后的数据，失败返回None
-    """
+    """安全加载JSON文件"""
     try:
         with open(filepath, 'r') as f:
             return json.load(f)
@@ -146,22 +149,12 @@ def load_json_file(filepath):
         cmds.warning("无法读取文件 {}: {}".format(filepath, e))
         return None
     except ValueError as e:
-        # Python 2.7 uses ValueError for JSON decode errors
         cmds.warning("JSON解析错误 {}: {}".format(filepath, e))
         return None
 
 
 def save_json_file(filepath, data):
-    """
-    安全保存JSON文件
-    
-    Args:
-        filepath: 文件路径
-        data: 要保存的数据
-        
-    Returns:
-        bool: 是否成功
-    """
+    """安全保存JSON文件"""
     try:
         data_json = json.dumps(data, indent=4, separators=(',', ':'), ensure_ascii=False)
         with open(filepath, 'w') as f:
@@ -177,18 +170,14 @@ def save_json_file(filepath, data):
 # ============================================================================
 
 class MocapTransferTool:
-    """
-    动作捕捉数据传递工具
-    
-    用于将Mocap骨骼数据传递到控制器rig
-    """
+    """动作捕捉数据传递工具"""
     
     WINDOW_NAME = 'MocapToCtrl_Win'
-    WINDOW_TITLE = 'Mocap Motion To Ctrl'
+    WINDOW_TITLE = 'Mocap Motion To Ctrl v2.0'
     
     def __init__(self):
-        """初始化工具实例"""
-        self.ui = {}  # 存储UI元素引用
+        """初始化"""
+        self.ui = {}
         self.mapping_row_count = 0
     
     # ========================================================================
@@ -196,7 +185,7 @@ class MocapTransferTool:
     # ========================================================================
     
     def show(self):
-        """显示工具窗口"""
+        """显示窗口"""
         self._delete_existing_window()
         self._build_ui()
         cmds.showWindow(self.WINDOW_NAME)
@@ -207,150 +196,361 @@ class MocapTransferTool:
             cmds.deleteUI(self.WINDOW_NAME)
     
     def _build_ui(self):
-        """构建完整UI"""
-        cmds.window(self.WINDOW_NAME, t=self.WINDOW_TITLE)
+        """构建UI"""
+        cmds.window(self.WINDOW_NAME, t=self.WINDOW_TITLE, w=550)
         main_layout = cmds.columnLayout('MocapToCtrl_cl', adj=True)
         
+        self._build_namespace_frame(main_layout)
+        self._build_preset_frame(main_layout)
         self._build_mapping_frame(main_layout)
-        self._build_pose_frame(main_layout)
-        self._build_bake_frame(main_layout)
+        self._build_constraint_frame(main_layout)
+        self._build_characterize_frame(main_layout)
+    
+    def _build_namespace_frame(self, parent):
+        """命名空间设置区域"""
+        frame = cmds.frameLayout(p=parent, cll=True, cl=False, l='1. 命名空间设置 (Namespace)')
+        
+        cmds.rowLayout(nc=2, adj=2, p=frame)
+        self.ui['ctrl_namespace'] = cmds.textFieldButtonGrp(
+            w=260, cw=[[1, 80], [2, 120], [3, 50]],
+            l='Ctrl:', bl='<<获取',
+            bc=partial(self._get_namespace_from_selection, 'ctrl_namespace')
+        )
+        self.ui['joint_namespace'] = cmds.textFieldButtonGrp(
+            cw=[[1, 80], [2, 120], [3, 50]],
+            l='Joint:', bl='<<获取',
+            bc=partial(self._get_namespace_from_selection, 'joint_namespace')
+        )
+    
+    def _build_preset_frame(self, parent):
+        """预设管理区域"""
+        frame = cmds.frameLayout(p=parent, cll=True, cl=False, l='2. 映射预设 (Presets)')
+        
+        # 预设选择下拉框
+        cmds.rowLayout(nc=4, adj=1, p=frame)
+        self.ui['preset_menu'] = cmds.optionMenuGrp(
+            l='选择预设:', cw=[[1, 70], [2, 200]],
+            cc=partial(self._on_preset_selected)
+        )
+        cmds.menuItem(l='-- 选择预设 --')
+        self._refresh_preset_menu()
+        
+        cmds.button(w=60, l='加载', bgc=[0.4, 0.5, 0.4], 
+                    c=partial(self._call_callback, self._load_selected_preset))
+        cmds.button(w=60, l='删除', bgc=[0.5, 0.3, 0.3],
+                    c=partial(self._call_callback, self._delete_selected_preset))
+        cmds.button(w=60, l='刷新', 
+                    c=partial(self._call_callback, self._refresh_preset_menu))
+        
+        # 保存新预设
+        cmds.rowLayout(nc=3, adj=1, p=frame)
+        self.ui['new_preset_name'] = cmds.textFieldGrp(
+            l='新预设名:', cw=[[1, 70], [2, 280]],
+            tx='MyPreset'
+        )
+        cmds.button(w=80, l='保存预设', bgc=[0.3, 0.5, 0.6],
+                    c=partial(self._call_callback, self._save_new_preset))
+        cmds.button(w=80, l='导出文件',
+                    c=partial(self._call_callback, self.export_mapping))
+        
+        # 内置预设快速按钮
+        cmds.text(l='  快速加载内置预设:', al='left', p=frame)
+        cmds.rowLayout(nc=4, adj=4, p=frame)
+        cmds.button(w=100, l='J1Mapping', bgc=[0.35, 0.35, 0.4],
+                    c=partial(self._load_builtin_preset, 'J1Mapping1'))
+        cmds.button(w=100, l='J5Mapping', bgc=[0.35, 0.35, 0.4],
+                    c=partial(self._load_builtin_preset, 'J5Mapping'))
+        cmds.button(w=100, l='从文件导入...', 
+                    c=partial(self._call_callback, self.import_mapping))
+        cmds.text(l='')
     
     def _build_mapping_frame(self, parent):
-        """构建映射配置区域"""
-        frame = cmds.frameLayout('Mapping_fl', p=parent, cll=True, l='MocapMapping')
+        """映射列表区域"""
+        frame = cmds.frameLayout('Mapping_fl', p=parent, cll=True, cl=False, 
+                                  l='3. 映射列表 (Ctrl -> Joint)')
         
-        # 导入导出按钮
-        cmds.rowLayout(nc=2, adj=2)
-        cmds.button(w=250, l='Export', c=lambda *args: self.export_mapping())
-        cmds.button(l='Import', c=lambda *args: self.import_mapping())
+        # 标题行
+        cmds.rowLayout(nc=3, cw=[[1, 220], [2, 20], [3, 220]], p=frame)
+        cmds.text(l='    控制器 (Ctrl)', al='left', fn='boldLabelFont')
+        cmds.text(l='')
+        cmds.text(l='    骨骼 (Joint)', al='left', fn='boldLabelFont')
         
-        # 预设按钮
-        cmds.rowLayout(p=frame, nc=2, adj=2)
-        cmds.button(w=250, l='OpenMapping_J1', c=partial(self._load_preset, 'J1Mapping1'))
-        cmds.button(l='OpenMapping_J5', c=partial(self._load_preset, 'J5Mapping'))
-        
-        # 命名空间输入
-        cmds.rowLayout(p=frame, nc=3, adj=3)
-        self.ui['ctrl_namespace'] = cmds.textFieldButtonGrp(
-            w=250, cw=[[1, 100], [2, 100], [3, 50]],
-            l='Ctrl_Namespace:', bl='Get',
-            bc=lambda: self._get_namespace_from_selection('ctrl_namespace')
-        )
-        cmds.text(l='|')
-        self.ui['joint_namespace'] = cmds.textFieldButtonGrp(
-            cw=[[1, 100], [2, 100], [3, 50]],
-            l='Joint_Namespace:', bl='Get',
-            bc=lambda: self._get_namespace_from_selection('joint_namespace')
-        )
-        
-        cmds.separator(p=frame)
-        
-        # 映射列表滚动区域
+        # 映射滚动区域
         self.ui['mapping_scroll'] = cmds.scrollLayout(
-            'Mapping_sl', p=frame, w=500, h=200, cr=True
+            'Mapping_sl', p=frame, w=520, h=180, cr=True
         )
         
-        # 添加/清除按钮
-        cmds.rowLayout(p=frame, nc=2, adj=2)
-        cmds.button(w=250, h=30, bgc=[0.3, 0.367, 0.23], l='Add',
-                    c=lambda *args: self._add_mapping_row())
-        cmds.button(w=250, h=30, bgc=[0.3, 0.367, 0.23], l='Clean',
-                    c=lambda *args: self._clean_mapping_rows())
+        # 操作按钮
+        cmds.rowLayout(p=frame, nc=3, adj=3)
+        cmds.button(w=150, h=28, bgc=[0.3, 0.45, 0.3], l='+ 添加映射行',
+                    c=partial(self._call_callback, self._add_mapping_row))
+        cmds.button(w=150, h=28, bgc=[0.5, 0.35, 0.3], l='清空所有',
+                    c=partial(self._call_callback, self._clean_mapping_rows))
+        cmds.text(l='')
     
-    def _build_pose_frame(self, parent):
-        """构建姿态设置区域"""
-        frame = cmds.frameLayout(p=parent, cll=True, l='SetPose')
-        cmds.rowLayout(nc=6, cw=[[1, 100], [2, 120]], adj=3)
+    def _build_constraint_frame(self, parent):
+        """约束设置和执行区域"""
+        frame = cmds.frameLayout(p=parent, cll=True, cl=False, 
+                                  l='4. 约束连接 & 烘焙 (Connect & Bake)')
         
-        pose_buttons = [
-            ('J1Characterize', self.j1_characterize),
-            ('J5Characterize', self.j5_characterize),
-            ('MobuLydia_Characteriz', self.lydia_characterize),
-            ('J5lu', self.j5lu_characterize),
-            ('UE4Lydia_Characteriz', self.ue_lydia_characterize),
-            ('Connect', partial(self.connect_or_bake, 'Connect')),
+        # 约束选项
+        cmds.rowLayout(nc=5, p=frame)
+        cmds.text(l='  约束选项: ', w=70)
+        self.ui['use_rotation'] = cmds.checkBox(l='旋转 (Rotation)', v=True)
+        self.ui['use_translation'] = cmds.checkBox(l='位移 (Translation)', v=False)
+        cmds.text(l='   |   ')
+        self.ui['maintain_offset'] = cmds.checkBox(l='保持偏移 (Maintain Offset)', v=True)
+        
+        cmds.separator(p=frame, h=8, st='in')
+        
+        # 特殊控制器位移设置
+        cmds.rowLayout(nc=2, p=frame, adj=2)
+        cmds.text(l='  额外添加位移约束的控制器:', w=180, al='left')
+        self.ui['extra_translate_ctrls'] = cmds.textField(
+            w=300, tx='RootX_M, body_ctrl, FKRoot_M',
+            ann='输入需要额外添加位移约束的控制器名，用逗号分隔'
+        )
+        
+        cmds.separator(p=frame, h=8, st='in')
+        
+        # 执行按钮
+        cmds.rowLayout(nc=3, adj=3, p=frame)
+        cmds.button(w=180, h=35, bgc=[0.3, 0.5, 0.3], l='连接约束 (Connect)',
+                    c=partial(self._call_callback, self._do_connect))
+        cmds.button(w=180, h=35, bgc=[0.5, 0.4, 0.2], l='烘焙动画 (Bake)',
+                    c=partial(self._call_callback, self._do_bake))
+        cmds.text(l='')
+    
+    def _build_characterize_frame(self, parent):
+        """角色化设置区域"""
+        frame = cmds.frameLayout(p=parent, cll=True, cl=True, 
+                                  l='5. 角色化预设 (Characterize) - 点击展开')
+        
+        cmds.text(l='  应用骨骼姿态预设:', al='left', p=frame)
+        cmds.rowLayout(nc=5, p=frame)
+        
+        char_buttons = [
+            ('J1', 'J1_jointsLoc'),
+            ('J5', 'J5lu'),
+            ('UE4 Lydia', 'UE4Lydia_jointDeta'),
         ]
         
-        for label, callback in pose_buttons:
-            # Python 2.7 compatible: use default arg before *args
-            cmds.button(w=100, h=30, bgc=[0.3, 0.367, 0.23], l=label,
-                        c=partial(self._call_callback, callback))
-    
-    def _build_bake_frame(self, parent):
-        """构建烘焙区域"""
-        frame = cmds.frameLayout(p=parent, cll=True, l='motionToCtrl')
-        cmds.button(bgc=[0.3, 0.367, 0.23], l='BakeToCtrl',
-                    c=lambda *args: self.connect_or_bake('Bake'))
+        for label, preset in char_buttons:
+            cmds.button(w=100, h=28, bgc=[0.4, 0.4, 0.45], l=label,
+                        c=partial(self._apply_characterize, preset))
+        
+        cmds.button(w=100, h=28, l='J5 Match',
+                    c=partial(self._call_callback, self.j5_characterize))
+        cmds.button(w=100, h=28, l='Lydia Match',
+                    c=partial(self._call_callback, self.lydia_characterize))
     
     # ========================================================================
-    # UI 辅助方法
+    # 回调辅助
     # ========================================================================
     
     def _call_callback(self, callback, *args):
-        """调用回调函数的辅助方法 (Python 2.7 兼容)"""
+        """回调辅助方法 (Python 2.7 兼容)"""
         return callback()
     
-    def _get_namespace_from_selection(self, field_key):
-        """从选择获取命名空间并填入指定字段"""
+    def _get_namespace_from_selection(self, field_key, *args):
+        """从选择获取命名空间"""
         selection = cmds.ls(sl=True)
         if not selection:
             cmds.warning("请先选择一个物体")
             return
-        
         namespace = get_namespace_from_object(selection[0])
         cmds.textFieldButtonGrp(self.ui[field_key], e=True, tx=namespace)
     
-    def _get_name_from_selection(self, field_name):
-        """从选择获取对象名称（不含命名空间）"""
+    def _get_name_from_selection(self, field_name, *args):
+        """从选择获取对象名称"""
         selection = cmds.ls(sl=True)
         if not selection:
             cmds.warning("请先选择一个物体")
             return
-        
         obj = selection[0]
         name = obj.split(':')[-1] if ':' in obj else obj
         cmds.textFieldButtonGrp(field_name, e=True, tx=name)
     
+    # ========================================================================
+    # 预设管理
+    # ========================================================================
+    
+    def _refresh_preset_menu(self):
+        """刷新预设下拉菜单"""
+        menu = self.ui['preset_menu']
+        # 获取菜单项
+        menu_items = cmds.optionMenuGrp(menu, q=True, ill=True)
+        if menu_items:
+            for item in menu_items:
+                cmds.deleteUI(item)
+        
+        # 添加默认选项
+        popup_menu = cmds.optionMenuGrp(menu, q=True, pm=True)
+        cmds.menuItem(l='-- 选择预设 --', p=popup_menu)
+        
+        # 添加用户预设
+        user_presets = MocapConfig.list_user_presets()
+        if user_presets:
+            cmds.menuItem(divider=True, p=popup_menu)
+            cmds.menuItem(l='--- 用户预设 ---', en=False, p=popup_menu)
+            for preset in user_presets:
+                cmds.menuItem(l=preset, p=popup_menu)
+        
+        # 添加内置预设
+        cmds.menuItem(divider=True, p=popup_menu)
+        cmds.menuItem(l='--- 内置预设 ---', en=False, p=popup_menu)
+        for preset in MocapConfig.BUILTIN_PRESETS.keys():
+            cmds.menuItem(l='[内置] ' + preset, p=popup_menu)
+        
+        # 重置选择
+        cmds.optionMenuGrp(menu, e=True, sl=1)
+    
+    def _on_preset_selected(self, *args):
+        """预设选择变化时自动加载"""
+        self._load_selected_preset()
+    
+    def _load_selected_preset(self):
+        """加载选中的预设"""
+        selected = cmds.optionMenuGrp(self.ui['preset_menu'], q=True, v=True)
+        
+        if selected.startswith('--') or selected.startswith('---'):
+            return
+        
+        if selected.startswith('[内置] '):
+            # 内置预设
+            preset_name = selected[5:]  # 移除 '[内置] '
+            path = MocapConfig.get_builtin_preset_path(preset_name)
+        else:
+            # 用户预设
+            path = MocapConfig.get_user_preset_path(selected)
+        
+        if not os.path.exists(path):
+            cmds.warning("预设文件不存在: {}".format(path))
+            return
+        
+        mapping_data = load_json_file(path)
+        if mapping_data:
+            self._load_mapping_to_ui(mapping_data)
+            print("已加载预设: {}".format(selected))
+    
+    def _load_builtin_preset(self, preset_name, *args):
+        """加载内置预设"""
+        path = MocapConfig.get_builtin_preset_path(preset_name)
+        if not os.path.exists(path):
+            cmds.warning("内置预设文件不存在: {}".format(path))
+            return
+        
+        mapping_data = load_json_file(path)
+        if mapping_data:
+            self._load_mapping_to_ui(mapping_data)
+            print("已加载内置预设: {}".format(preset_name))
+    
+    def _save_new_preset(self):
+        """保存新预设"""
+        name = cmds.textFieldGrp(self.ui['new_preset_name'], q=True, tx=True)
+        name = name.strip()
+        
+        if not name:
+            cmds.warning("请输入预设名称")
+            return
+        
+        # 检查名称是否有效
+        invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+        for char in invalid_chars:
+            if char in name:
+                cmds.warning("预设名称不能包含特殊字符: {}".format(char))
+                return
+        
+        mapping_data = self._collect_mapping_from_ui()
+        if not mapping_data['Ctrls']:
+            cmds.warning("没有映射数据可保存")
+            return
+        
+        path = MocapConfig.get_user_preset_path(name)
+        
+        # 检查是否覆盖
+        if os.path.exists(path):
+            result = cmds.confirmDialog(
+                title='确认覆盖',
+                message='预设 "{}" 已存在，是否覆盖？'.format(name),
+                button=['覆盖', '取消'],
+                defaultButton='覆盖',
+                cancelButton='取消'
+            )
+            if result != '覆盖':
+                return
+        
+        if save_json_file(path, mapping_data):
+            cmds.confirmDialog(title='成功', message='预设已保存: {}'.format(name))
+            self._refresh_preset_menu()
+    
+    def _delete_selected_preset(self):
+        """删除选中的预设"""
+        selected = cmds.optionMenuGrp(self.ui['preset_menu'], q=True, v=True)
+        
+        if selected.startswith('--') or selected.startswith('---'):
+            cmds.warning("请先选择一个预设")
+            return
+        
+        if selected.startswith('[内置]'):
+            cmds.warning("不能删除内置预设")
+            return
+        
+        result = cmds.confirmDialog(
+            title='确认删除',
+            message='确定要删除预设 "{}" 吗？'.format(selected),
+            button=['删除', '取消'],
+            defaultButton='取消',
+            cancelButton='取消'
+        )
+        
+        if result != '删除':
+            return
+        
+        path = MocapConfig.get_user_preset_path(selected)
+        try:
+            os.remove(path)
+            cmds.confirmDialog(title='成功', message='预设已删除')
+            self._refresh_preset_menu()
+        except OSError as e:
+            cmds.warning("删除失败: {}".format(e))
+    
+    # ========================================================================
+    # 映射管理
+    # ========================================================================
+    
     def _add_mapping_row(self):
-        """添加一行映射输入"""
+        """添加映射行"""
         idx = self.mapping_row_count
         row_name = 'add_rl{}'.format(idx)
         ctrl_field = 'add_tfb0{}'.format(idx)
         joint_field = 'add_tfb1{}'.format(idx)
         
-        cmds.rowLayout(row_name, p=self.ui['mapping_scroll'], nc=3, cw=[[1, 250], [2, 10]])
+        cmds.rowLayout(row_name, p=self.ui['mapping_scroll'], nc=3, cw=[[1, 240], [2, 20], [3, 240]])
         cmds.textFieldButtonGrp(
-            ctrl_field, cw=[[1, 100], [2, 100], [3, 50]],
-            l='', bl='Get',
+            ctrl_field, cw=[[1, 1], [2, 180], [3, 50]],
+            l='', bl='<<',
             bc=partial(self._get_name_from_selection, ctrl_field)
         )
-        cmds.text(l='|')
+        cmds.text(l='->')
         cmds.textFieldButtonGrp(
-            joint_field, cw=[[1, 1], [2, 100], [3, 50]],
-            l='', bl='Get',
+            joint_field, cw=[[1, 1], [2, 180], [3, 50]],
+            l='', bl='<<',
             bc=partial(self._get_name_from_selection, joint_field)
         )
         
         self.mapping_row_count += 1
     
     def _clean_mapping_rows(self):
-        """清除所有映射行"""
+        """清空映射行"""
         child_array = cmds.scrollLayout(self.ui['mapping_scroll'], q=True, ca=True)
         if child_array:
             for child in child_array:
                 cmds.deleteUI(child)
         self.mapping_row_count = 0
     
-    def _get_ctrl_namespace(self):
-        """获取控制器命名空间"""
-        return cmds.textFieldButtonGrp(self.ui['ctrl_namespace'], q=True, tx=True)
-    
-    def _get_joint_namespace(self):
-        """获取骨骼命名空间"""
-        return cmds.textFieldButtonGrp(self.ui['joint_namespace'], q=True, tx=True)
-    
     def _collect_mapping_from_ui(self):
-        """从UI收集映射数据"""
+        """收集映射数据"""
         ctrls = []
         joints = []
         
@@ -368,7 +568,7 @@ class MocapTransferTool:
         return {'Ctrls': ctrls, 'Joints': joints}
     
     def _load_mapping_to_ui(self, mapping_data):
-        """将映射数据加载到UI"""
+        """加载映射到UI"""
         self._clean_mapping_rows()
         
         ctrls = mapping_data.get('Ctrls', [])
@@ -380,16 +580,23 @@ class MocapTransferTool:
             cmds.textFieldButtonGrp('add_tfb0{}'.format(idx), e=True, tx=ctrl)
             cmds.textFieldButtonGrp('add_tfb1{}'.format(idx), e=True, tx=jnt)
     
+    def _get_ctrl_namespace(self):
+        """获取控制器命名空间"""
+        return cmds.textFieldButtonGrp(self.ui['ctrl_namespace'], q=True, tx=True)
+    
+    def _get_joint_namespace(self):
+        """获取骨骼命名空间"""
+        return cmds.textFieldButtonGrp(self.ui['joint_namespace'], q=True, tx=True)
+    
     # ========================================================================
     # 导入导出
     # ========================================================================
     
     def export_mapping(self):
-        """导出映射配置到JSON文件"""
+        """导出映射到文件"""
         mapping_data = self._collect_mapping_from_ui()
-        
         if not mapping_data['Ctrls']:
-            cmds.warning("没有有效的映射数据可导出")
+            cmds.warning("没有映射数据可导出")
             return
         
         path = cmds.fileDialog2(ff='Json Files(*.json)', fm=0)
@@ -397,10 +604,10 @@ class MocapTransferTool:
             return
         
         if save_json_file(path[0], mapping_data):
-            cmds.confirmDialog(title='成功', message='映射数据已导出到:\n{}'.format(path[0]))
+            cmds.confirmDialog(title='成功', message='已导出到:\n{}'.format(path[0]))
     
     def import_mapping(self):
-        """从JSON文件导入映射配置"""
+        """从文件导入映射"""
         path = cmds.fileDialog2(ff='Json Files(*.json)', fm=1)
         if not path:
             return
@@ -409,86 +616,160 @@ class MocapTransferTool:
         if mapping_data:
             self._load_mapping_to_ui(mapping_data)
     
-    def _load_preset(self, preset_name, *args):
-        """加载预设映射配置"""
-        path = MocapConfig.get_preset_path(preset_name)
-        
-        if not os.path.exists(path):
-            cmds.warning("预设文件不存在: {}".format(path))
+    # ========================================================================
+    # 约束连接
+    # ========================================================================
+    
+    def _do_connect(self):
+        """执行约束连接"""
+        mapping = self._collect_mapping_from_ui()
+        if not mapping['Ctrls']:
+            cmds.warning("没有映射数据")
             return
         
-        mapping_data = load_json_file(path)
-        if mapping_data:
-            self._load_mapping_to_ui(mapping_data)
-    
-    # ========================================================================
-    # 姿态设置 (Characterize)
-    # ========================================================================
-    
-    def _apply_location_data(self, location_data, joint_list=None):
-        """
-        应用位置数据到骨骼
+        ctrl_ns = self._get_ctrl_namespace()
+        jnt_ns = self._get_joint_namespace()
         
-        Args:
-            location_data: 位置数据字典
-            joint_list: 要处理的骨骼列表，None则使用location_data的所有键
-        """
-        jnt_namespace = self._get_joint_namespace()
-        joint_list = joint_list or list(location_data.keys())
+        # 获取选项
+        use_rotation = cmds.checkBox(self.ui['use_rotation'], q=True, v=True)
+        use_translation = cmds.checkBox(self.ui['use_translation'], q=True, v=True)
+        maintain_offset = cmds.checkBox(self.ui['maintain_offset'], q=True, v=True)
+        
+        if not use_rotation and not use_translation:
+            cmds.warning("请至少选择一种约束类型（旋转或位移）")
+            return
+        
+        # 获取额外需要位移约束的控制器
+        extra_trans_text = cmds.textField(self.ui['extra_translate_ctrls'], q=True, tx=True)
+        extra_trans_ctrls = [x.strip() for x in extra_trans_text.split(',') if x.strip()]
+        
+        # 设置FK模式
+        self._set_fkik_to_fk(ctrl_ns)
         
         cmds.undoInfo(openChunk=True)
         try:
-            for joint_name in joint_list:
-                if joint_name in location_data:
-                    full_name = '{}{}'.format(jnt_namespace, joint_name)
-                    if cmds.objExists(full_name):
-                        set_transform(full_name, location_data[joint_name])
-                    else:
-                        cmds.warning("骨骼不存在: {}".format(full_name))
+            for jnt, ctrl in zip(mapping['Joints'], mapping['Ctrls']):
+                src = '{}{}'.format(jnt_ns, jnt)
+                dst = '{}{}'.format(ctrl_ns, ctrl)
+                
+                if not cmds.objExists(src):
+                    cmds.warning("源对象不存在: {}".format(src))
+                    continue
+                if not cmds.objExists(dst):
+                    cmds.warning("目标对象不存在: {}".format(dst))
+                    continue
+                
+                # 旋转约束
+                if use_rotation:
+                    cmds.orientConstraint(src, dst, mo=maintain_offset, w=1)
+                
+                # 位移约束
+                if use_translation:
+                    cmds.pointConstraint(src, dst, mo=maintain_offset, w=1)
+                elif ctrl in extra_trans_ctrls:
+                    # 额外添加位移约束的控制器
+                    cmds.pointConstraint(src, dst, mo=maintain_offset, w=1)
+            
+            print("约束连接完成！旋转:{}, 位移:{}".format(use_rotation, use_translation))
         finally:
             cmds.undoInfo(closeChunk=True)
     
-    def _characterize_from_file(self, preset_key, joint_list=None):
-        """从预设文件应用角色化"""
-        path = MocapConfig.get_preset_path(preset_key)
+    def _do_bake(self):
+        """执行烘焙"""
+        mapping = self._collect_mapping_from_ui()
+        if not mapping['Ctrls']:
+            cmds.warning("没有映射数据")
+            return
+        
+        ctrl_ns = self._get_ctrl_namespace()
+        
+        # 收集控制器
+        ctrls_to_bake = ['{}{}'.format(ctrl_ns, ctrl) for ctrl in mapping['Ctrls']]
+        
+        # 添加 RootX_M
+        root_ctrl = '{}RootX_M'.format(ctrl_ns)
+        if cmds.objExists(root_ctrl) and root_ctrl not in ctrls_to_bake:
+            ctrls_to_bake.append(root_ctrl)
+        
+        # 过滤存在的
+        ctrls_to_bake = [c for c in ctrls_to_bake if cmds.objExists(c)]
+        
+        if not ctrls_to_bake:
+            cmds.warning("没有有效的控制器")
+            return
+        
+        time_start = cmds.playbackOptions(q=True, min=True)
+        time_end = cmds.playbackOptions(q=True, max=True)
+        
+        cmds.bakeResults(
+            ctrls_to_bake,
+            sm=True,
+            hi='selected',
+            t=(time_start, time_end),
+            sb=1
+        )
+        print("烘焙完成！共 {} 个控制器".format(len(ctrls_to_bake)))
+    
+    def _set_fkik_to_fk(self, ctrl_ns):
+        """设置FK模式"""
+        for switch in MocapConfig.FKIK_SWITCHES:
+            full_name = '{}{}'.format(ctrl_ns, switch)
+            if cmds.objExists(full_name):
+                try:
+                    cmds.setAttr('{}.FKIKBlend'.format(full_name), 0)
+                except RuntimeError:
+                    pass
+    
+    # ========================================================================
+    # 角色化
+    # ========================================================================
+    
+    def _apply_characterize(self, preset_key, *args):
+        """应用角色化预设"""
+        path = MocapConfig.get_characterize_path(preset_key)
         
         if not os.path.exists(path):
-            cmds.warning("预设文件不存在: {}".format(path))
+            cmds.warning("角色化预设不存在: {}".format(path))
             return
         
         location_data = load_json_file(path)
-        if location_data:
-            self._apply_location_data(location_data, joint_list)
-    
-    def j1_characterize(self):
-        """J1角色化"""
-        joint_list = MocapConfig.DEFAULT_JOINTS + MocapConfig.ROLL_JOINTS
-        self._characterize_from_file('J1_jointsLoc', joint_list)
+        if not location_data:
+            return
+        
+        jnt_ns = self._get_joint_namespace()
+        
+        cmds.undoInfo(openChunk=True)
+        try:
+            for joint_name, transform in location_data.items():
+                full_name = '{}{}'.format(jnt_ns, joint_name)
+                if cmds.objExists(full_name):
+                    set_transform(full_name, transform)
+            print("角色化完成: {}".format(preset_key))
+        finally:
+            cmds.undoInfo(closeChunk=True)
     
     def j5_characterize(self):
-        """J5角色化"""
-        jnt_namespace = self._get_joint_namespace()
-        ctrl_namespace = self._get_ctrl_namespace()
+        """J5角色化匹配"""
+        jnt_ns = self._get_joint_namespace()
+        ctrl_ns = self._get_ctrl_namespace()
         
-        base_joint_root = '{}Joints'.format(ctrl_namespace)
-        mocap_joint_root = '{}Joints'.format(jnt_namespace)
+        base_root = '{}Joints'.format(ctrl_ns)
+        mocap_root = '{}Joints'.format(jnt_ns)
         
-        if not cmds.objExists(base_joint_root) or not cmds.objExists(mocap_joint_root):
+        if not cmds.objExists(base_root) or not cmds.objExists(mocap_root):
             cmds.warning("找不到骨骼根节点")
             return
         
-        base_joints = cmds.listRelatives(base_joint_root, c=True, ad=True, type='joint', f=True) or []
-        mocap_joints = cmds.listRelatives(mocap_joint_root, c=True, ad=True, type='joint', f=True) or []
+        base_joints = cmds.listRelatives(base_root, c=True, ad=True, type='joint', f=True) or []
+        mocap_joints = cmds.listRelatives(mocap_root, c=True, ad=True, type='joint', f=True) or []
         
         cmds.undoInfo(openChunk=True)
         try:
             for mocap_jnt in mocap_joints:
                 mocap_short = mocap_jnt.split(':')[-1]
-                # 重置旋转
                 for attr in ['rx', 'ry', 'rz']:
                     cmds.setAttr('{}.{}'.format(mocap_jnt, attr), 0)
                 
-                # 匹配Hips位置
                 for base_jnt in base_joints:
                     base_short = base_jnt.split(':')[-1]
                     if base_short == mocap_short == 'Hips':
@@ -497,20 +778,12 @@ class MocapTransferTool:
         finally:
             cmds.undoInfo(closeChunk=True)
     
-    def j5lu_characterize(self):
-        """J5lu角色化"""
-        self._characterize_from_file('J5lu')
-    
-    def ue_lydia_characterize(self):
-        """UE4 Lydia角色化"""
-        self._characterize_from_file('UE4Lydia_jointDeta')
-    
     def lydia_characterize(self):
-        """Mobu Lydia角色化"""
-        jnt_namespace = self._get_joint_namespace()
-        ctrl_namespace = self._get_ctrl_namespace()
+        """Lydia角色化匹配"""
+        jnt_ns = self._get_joint_namespace()
+        ctrl_ns = self._get_ctrl_namespace()
         
-        root_joint = '{}root'.format(ctrl_namespace)
+        root_joint = '{}root'.format(ctrl_ns)
         if not cmds.objExists(root_joint):
             cmds.warning("找不到根骨骼: {}".format(root_joint))
             return
@@ -520,135 +793,14 @@ class MocapTransferTool:
         cmds.undoInfo(openChunk=True)
         try:
             for jnt in joint_list:
-                src_jnt = '{}{}'.format(ctrl_namespace, jnt)
-                dst_jnt = '{}{}'.format(jnt_namespace, jnt)
+                src_jnt = '{}{}'.format(ctrl_ns, jnt)
+                dst_jnt = '{}{}'.format(jnt_ns, jnt)
                 
                 if cmds.objExists(src_jnt) and cmds.objExists(dst_jnt):
                     transform = get_transform(src_jnt)
                     set_transform(dst_jnt, transform)
         finally:
             cmds.undoInfo(closeChunk=True)
-    
-    # ========================================================================
-    # 连接和烘焙
-    # ========================================================================
-    
-    def connect_or_bake(self, operation_type):
-        """
-        连接约束或烘焙动画
-        
-        Args:
-            operation_type: 'Connect' 或 'Bake'
-        """
-        mapping = self._collect_mapping_from_ui()
-        if not mapping['Ctrls']:
-            cmds.warning("没有有效的映射数据")
-            return
-        
-        ctrl_namespace = self._get_ctrl_namespace()
-        jnt_namespace = self._get_joint_namespace()
-        
-        # 设置FK/IK切换为FK模式
-        self._set_fkik_to_fk(ctrl_namespace)
-        
-        if operation_type == 'Connect':
-            self._create_constraints(mapping, ctrl_namespace, jnt_namespace)
-        elif operation_type == 'Bake':
-            self._bake_animation(mapping, ctrl_namespace)
-    
-    def _set_fkik_to_fk(self, ctrl_namespace):
-        """将所有FK/IK切换设置为FK模式"""
-        for switch in MocapConfig.FKIK_SWITCHES:
-            full_name = '{}{}'.format(ctrl_namespace, switch)
-            if cmds.objExists(full_name):
-                try:
-                    cmds.setAttr('{}.FKIKBlend'.format(full_name), 0)
-                except RuntimeError:
-                    pass  # 属性可能被锁定
-    
-    def _create_constraints(self, mapping, ctrl_namespace, jnt_namespace):
-        """创建约束连接"""
-        cmds.undoInfo(openChunk=True)
-        try:
-            for jnt, ctrl in zip(mapping['Joints'], mapping['Ctrls']):
-                src = '{}{}'.format(jnt_namespace, jnt)
-                dst = '{}{}'.format(ctrl_namespace, ctrl)
-                
-                if not cmds.objExists(src) or not cmds.objExists(dst):
-                    cmds.warning("对象不存在: {} -> {}".format(src, dst))
-                    continue
-                
-                # 方向约束
-                cmds.orientConstraint(src, dst, mo=True, w=1)
-                
-                # 特殊控制器添加位置约束
-                if ctrl in ['RootX_M', 'body_ctrl']:
-                    cmds.pointConstraint(src, dst, mo=True, w=1)
-                
-                # FKRoot_M特殊处理
-                if ctrl == 'FKRoot_M':
-                    root_ctrl = '{}RootX_M'.format(ctrl_namespace)
-                    if cmds.objExists(root_ctrl):
-                        cmds.pointConstraint(src, root_ctrl, mo=True, w=1)
-        finally:
-            cmds.undoInfo(closeChunk=True)
-    
-    def _bake_animation(self, mapping, ctrl_namespace):
-        """烘焙动画到控制器"""
-        # 收集要烘焙的控制器
-        ctrls_to_bake = ['{}{}'.format(ctrl_namespace, ctrl) for ctrl in mapping['Ctrls']]
-        
-        # 添加RootX_M
-        root_ctrl = '{}RootX_M'.format(ctrl_namespace)
-        if cmds.objExists(root_ctrl) and root_ctrl not in ctrls_to_bake:
-            ctrls_to_bake.append(root_ctrl)
-        
-        # 过滤存在的控制器
-        ctrls_to_bake = [c for c in ctrls_to_bake if cmds.objExists(c)]
-        
-        if not ctrls_to_bake:
-            cmds.warning("没有有效的控制器可烘焙")
-            return
-        
-        # 获取时间范围
-        time_start = cmds.playbackOptions(q=True, min=True)
-        time_end = cmds.playbackOptions(q=True, max=True)
-        
-        # 烘焙
-        cmds.bakeResults(
-            ctrls_to_bake,
-            sm=True,
-            hi='selected',
-            t=(time_start, time_end),
-            sb=1
-        )
-    
-    # ========================================================================
-    # 保存骨骼位置
-    # ========================================================================
-    
-    def save_joints_location(self):
-        """保存当前骨骼位置到文件"""
-        location_data = OrderedDict()
-        
-        # 收集主骨骼数据
-        for jnt in MocapConfig.DEFAULT_JOINTS:
-            if cmds.objExists(jnt):
-                location_data[jnt] = get_transform(jnt)
-        
-        # 收集Roll骨骼数据
-        for jnt in MocapConfig.ROLL_JOINTS:
-            if cmds.objExists(jnt):
-                location_data[jnt] = get_transform(jnt)
-        
-        if not location_data:
-            cmds.warning("没有找到有效的骨骼")
-            return
-        
-        path = cmds.fileDialog2(ff='Json Files(*.json)', fm=0)
-        if path:
-            if save_json_file(path[0], location_data):
-                cmds.confirmDialog(title='成功', message='骨骼位置已保存')
 
 
 # ============================================================================
@@ -656,17 +808,11 @@ class MocapTransferTool:
 # ============================================================================
 
 def show():
-    """
-    显示工具窗口的入口函数
-    
-    Returns:
-        MocapTransferTool: 工具实例
-    """
+    """显示工具窗口"""
     tool = MocapTransferTool()
     tool.show()
     return tool
 
 
-# 供脚本直接运行时使用
 if __name__ == '__main__':
     show()
