@@ -198,6 +198,7 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         cmds.warning('场景中没有检测到任何引用或命名空间。')
         return 0
 
+    print('=' * 50)
     print('检测到以下引用，将进行导入与命名空间清理：')
     for r, ns, fpath in items:
         print(' - refNode: {} | 命名空间: {} | 文件: {}'.format(r, ns, fpath))
@@ -207,8 +208,14 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         return len(items)
 
     processed = 0
-    # 循环处理每个引用
+    namespaces_to_remove = []
+    
+    # 第一步：导入所有引用
+    print('\n--- 第一步：导入引用 ---')
     for refNode, ns, _ in items:
+        # 记录命名空间待删除
+        namespaces_to_remove.append(ns)
+        
         # 尝试加载引用（如果未加载）
         try:
             if not cmds.referenceQuery(refNode, isLoaded=True):
@@ -219,42 +226,90 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         # 导入引用
         try:
             cmds.file(importReference=True, referenceNode=refNode)
-            print('已导入引用: {}'.format(refNode))
+            print('  [OK] 已导入引用: {}'.format(refNode))
             processed += 1
         except RuntimeError:
             try:
                 cmds.lockNode(refNode, lock=False)
                 cmds.file(importReference=True, referenceNode=refNode)
-                print('已解锁并导入引用: {}'.format(refNode))
+                print('  [OK] 已解锁并导入引用: {}'.format(refNode))
                 processed += 1
             except Exception as e2:
-                cmds.warning('导入失败 {}: {}'.format(refNode, e2))
-                continue
+                cmds.warning('  [FAIL] 导入失败 {}: {}'.format(refNode, e2))
 
-        # 删除命名空间（包括子命名空间）
-        if ns and cmds.namespace(exists=ns):
-            try:
-                if also_nested:
-                    sub_ns = cmds.namespaceInfo(':{}'.format(ns), listOnlyNamespaces=True, recurse=True) or []
-                    sub_ns_sorted = sorted(
-                        [s[1:] if s.startswith(':') else s for s in sub_ns],
-                        key=lambda x: x.count(':'), reverse=True
-                    )
-                    for s in sub_ns_sorted:
-                        if s and cmds.namespace(exists=s):
-                            try:
-                                cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
-                                print('已删除子命名空间: {}'.format(s))
-                            except RuntimeError:
-                                pass
-                cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
-                print('已删除主命名空间: {}'.format(ns))
-            except RuntimeError as e:
-                cmds.warning('删除命名空间失败 {}: {}'.format(ns, str(e)))
+    # 第二步：删除所有命名空间
+    print('\n--- 第二步：删除命名空间 ---')
+    remove_all_namespaces(also_nested=also_nested)
 
-    print('\n所有引用已本地化，命名空间已清理完成！请保存场景为新文件。')
+    print('\n' + '=' * 50)
+    print('所有引用已本地化，命名空间已清理完成！')
     print('共处理 {} 个引用。'.format(processed))
+    print('请保存场景为新文件。')
     return processed
+
+
+def remove_all_namespaces(also_nested=True):
+    """
+    删除场景中所有非默认命名空间。
+    
+    :param also_nested: 是否递归删除嵌套命名空间
+    """
+    # 默认命名空间，不能删除
+    default_namespaces = ['UI', 'shared']
+    
+    # 获取所有命名空间
+    all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
+    
+    # 过滤掉默认命名空间
+    namespaces = [ns for ns in all_namespaces if ns not in default_namespaces]
+    
+    if not namespaces:
+        print('  没有需要删除的命名空间。')
+        return
+    
+    print('  发现 {} 个命名空间待删除: {}'.format(len(namespaces), namespaces))
+    
+    # 按嵌套深度排序（从深到浅删除）
+    namespaces_sorted = sorted(namespaces, key=lambda x: x.count(':'), reverse=True)
+    
+    deleted_count = 0
+    for ns in namespaces_sorted:
+        # 再次检查是否存在（可能已被父级删除）
+        if ns in default_namespaces:
+            continue
+            
+        try:
+            # 检查命名空间是否存在
+            if cmds.namespace(exists=ns):
+                cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
+                print('  [OK] 已删除命名空间: {}'.format(ns))
+                deleted_count += 1
+        except RuntimeError as e:
+            # 尝试使用完整路径
+            try:
+                full_ns = ':' + ns if not ns.startswith(':') else ns
+                if cmds.namespace(exists=full_ns):
+                    cmds.namespace(removeNamespace=full_ns, mergeNamespaceWithParent=True)
+                    print('  [OK] 已删除命名空间: {}'.format(full_ns))
+                    deleted_count += 1
+            except RuntimeError as e2:
+                cmds.warning('  [FAIL] 删除命名空间失败 {}: {}'.format(ns, str(e2)))
+    
+    print('  共删除 {} 个命名空间。'.format(deleted_count))
+    return deleted_count
+
+
+def remove_namespace_only():
+    """
+    仅删除所有命名空间（不导入引用）。
+    用于引用已导入但命名空间未清理的情况。
+    """
+    print('=' * 50)
+    print('开始清理命名空间...')
+    count = remove_all_namespaces(also_nested=True)
+    print('=' * 50)
+    print('命名空间清理完成！')
+    return count
 
 
 # ============================================================================
@@ -312,6 +367,13 @@ class MocapTransferTool:
                     c=partial(self._flatten_references, True))
         cmds.button(w=180, h=30, l='导入引用并清理命名空间', bgc=[0.5, 0.35, 0.35],
                     c=partial(self._flatten_references, False))
+        cmds.text(l='')
+        
+        # 单独清理命名空间按钮
+        cmds.rowLayout(nc=3, p=frame, adj=3)
+        cmds.text(l='  仅清理命名空间(不导入引用):', w=200, al='left')
+        cmds.button(w=180, h=28, l='删除所有命名空间', bgc=[0.45, 0.35, 0.45],
+                    c=partial(self._call_callback, self._remove_namespaces_only))
         cmds.text(l='')
         
         cmds.separator(p=frame, h=5, st='none')
@@ -511,6 +573,28 @@ class MocapTransferTool:
                 message='已处理 {} 个引用！\n\n请保存场景为新文件。'.format(count),
                 button=['确定']
             )
+    
+    def _remove_namespaces_only(self):
+        """仅删除命名空间（不导入引用）"""
+        # 确认对话框
+        result = cmds.confirmDialog(
+            title='确认操作',
+            message='此操作将删除场景中所有命名空间，\n对象名称中的命名空间前缀将被移除。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
+            button=['继续', '取消'],
+            defaultButton='取消',
+            cancelButton='取消',
+            dismissString='取消'
+        )
+        if result != '继续':
+            return
+        
+        count = remove_namespace_only()
+        
+        cmds.confirmDialog(
+            title='完成',
+            message='命名空间清理完成！\n\n请检查场景并保存。',
+            button=['确定']
+        )
     
     # ========================================================================
     # 预设管理
