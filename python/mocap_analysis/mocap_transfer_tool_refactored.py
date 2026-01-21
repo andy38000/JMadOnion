@@ -568,45 +568,45 @@ class MocapTransferTool:
         if not dry_run:
             # 确认对话框
             result = cmds.confirmDialog(
-                title='确认操作',
-                message='此操作将导入所有引用并删除命名空间，\n操作不可撤销！\n\n建议先保存场景。\n\n是否继续？',
-                button=['继续', '取消'],
-                defaultButton='取消',
-                cancelButton='取消',
-                dismissString='取消'
+                title=u'确认操作',
+                message=u'此操作将导入所有引用并删除命名空间，\n操作不可撤销！\n\n建议先保存场景。\n\n是否继续？',
+                button=[u'继续', u'取消'],
+                defaultButton=u'取消',
+                cancelButton=u'取消',
+                dismissString=u'取消'
             )
-            if result != '继续':
+            if result != u'继续':
                 return
         
         count = flatten_reference_and_drop_all_namespaces(also_nested=also_nested, dry_run=dry_run)
         
-        if not dry_run and count > 0:
+        if not dry_run and count:
             cmds.confirmDialog(
-                title='完成',
-                message='已处理 {} 个引用！\n\n请保存场景为新文件。'.format(count),
-                button=['确定']
+                title=u'完成',
+                message=u'引用导入完成！\n\n请保存场景为新文件。',
+                button=[u'确定']
             )
     
     def _remove_namespaces_only(self):
         """仅删除命名空间（不导入引用）"""
         # 确认对话框
         result = cmds.confirmDialog(
-            title='确认操作',
-            message='此操作将删除场景中所有命名空间，\n对象名称中的命名空间前缀将被移除。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
-            button=['继续', '取消'],
-            defaultButton='取消',
-            cancelButton='取消',
-            dismissString='取消'
+            title=u'确认操作',
+            message=u'此操作将删除场景中所有命名空间，\n对象名称中的命名空间前缀将被移除。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
+            button=[u'继续', u'取消'],
+            defaultButton=u'取消',
+            cancelButton=u'取消',
+            dismissString=u'取消'
         )
-        if result != '继续':
+        if result != u'继续':
             return
         
         count = remove_namespace_only()
         
         cmds.confirmDialog(
-            title='完成',
-            message='命名空间清理完成！\n\n请检查场景并保存。',
-            button=['确定']
+            title=u'完成',
+            message=u'命名空间清理完成！\n\n请检查场景并保存。',
+            button=[u'确定']
         )
     
     # ========================================================================
@@ -709,17 +709,17 @@ class MocapTransferTool:
         # 检查是否覆盖
         if os.path.exists(path):
             result = cmds.confirmDialog(
-                title='确认覆盖',
-                message='预设 "{}" 已存在，是否覆盖？'.format(name),
-                button=['覆盖', '取消'],
-                defaultButton='覆盖',
-                cancelButton='取消'
+                title=u'确认覆盖',
+                message=u'预设 "%s" 已存在，是否覆盖？' % name,
+                button=[u'覆盖', u'取消'],
+                defaultButton=u'覆盖',
+                cancelButton=u'取消'
             )
-            if result != '覆盖':
+            if result != u'覆盖':
                 return
         
         if save_json_file(path, mapping_data):
-            cmds.confirmDialog(title='成功', message='预设已保存: {}'.format(name))
+            cmds.confirmDialog(title=u'成功', message=u'预设已保存: %s' % name)
             self._refresh_preset_menu()
     
     def _delete_selected_preset(self):
@@ -735,20 +735,20 @@ class MocapTransferTool:
             return
         
         result = cmds.confirmDialog(
-            title='确认删除',
-            message='确定要删除预设 "{}" 吗？'.format(selected),
-            button=['删除', '取消'],
-            defaultButton='取消',
-            cancelButton='取消'
+            title=u'确认删除',
+            message=u'确定要删除预设 "%s" 吗？' % selected,
+            button=[u'删除', u'取消'],
+            defaultButton=u'取消',
+            cancelButton=u'取消'
         )
         
-        if result != '删除':
+        if result != u'删除':
             return
         
         path = MocapConfig.get_user_preset_path(selected)
         try:
             os.remove(path)
-            cmds.confirmDialog(title='成功', message='预设已删除')
+            cmds.confirmDialog(title=u'成功', message=u'预设已删除')
             self._refresh_preset_menu()
         except OSError as e:
             cmds.warning("删除失败: {}".format(e))
@@ -857,7 +857,7 @@ class MocapTransferTool:
             return
         
         if save_json_file(path[0], mapping_data):
-            cmds.confirmDialog(title='成功', message='已导出到:\n{}'.format(path[0]))
+            cmds.confirmDialog(title=u'成功', message=u'已导出到:\n%s' % path[0])
     
     def import_mapping(self):
         """从文件导入映射"""
