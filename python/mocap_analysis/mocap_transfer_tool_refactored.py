@@ -40,18 +40,11 @@ class MocapConfig:
         'mocap_presets'
     )
     
-    # 内置预设
-    BUILTIN_PRESETS = {
-        'J1Mapping1': 'J1Mapping1.json',
-        'J5Mapping': 'J5Mapping.json',
-    }
+    # 内置预设（已清空）
+    BUILTIN_PRESETS = {}
     
-    # 角色化预设
-    CHARACTERIZE_PRESETS = {
-        'J1_jointsLoc': 'J1_jointsLoc.json',
-        'J5lu': 'J5lu.json',
-        'UE4Lydia_jointDeta': 'UE4Lydia_jointDeta.json',
-    }
+    # 角色化预设（已清空）
+    CHARACTERIZE_PRESETS = {}
     
     # 默认骨骼列表
     DEFAULT_JOINTS = [
@@ -365,7 +358,6 @@ class MocapTransferTool:
         self._build_preset_frame(main_layout)
         self._build_mapping_frame(main_layout)
         self._build_constraint_frame(main_layout)
-        self._build_characterize_frame(main_layout)
     
     def _build_reference_frame(self, parent):
         """引用工具区域"""
@@ -439,14 +431,9 @@ class MocapTransferTool:
         cmds.button(w=80, l='导出文件',
                     c=partial(self._call_callback, self.export_mapping))
         
-        # 内置预设快速按钮
-        cmds.text(l='  快速加载内置预设:', al='left', p=frame)
-        cmds.rowLayout(nc=4, adj=4, p=frame)
-        cmds.button(w=100, l='J1Mapping', bgc=[0.35, 0.35, 0.4],
-                    c=partial(self._load_builtin_preset, 'J1Mapping1'))
-        cmds.button(w=100, l='J5Mapping', bgc=[0.35, 0.35, 0.4],
-                    c=partial(self._load_builtin_preset, 'J5Mapping'))
-        cmds.button(w=100, l='从文件导入...', 
+        # 导入按钮
+        cmds.rowLayout(nc=2, adj=2, p=frame)
+        cmds.button(w=150, l='从文件导入...', 
                     c=partial(self._call_callback, self.import_mapping))
         cmds.text(l='')
     
