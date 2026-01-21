@@ -9,6 +9,7 @@ Mocap Data Transfer Tool for Maya
 - 骨骼姿态设置
 - 约束连接（可选旋转/位移）
 - 动画烘焙
+- 引用导入与命名空间清理
 
 兼容: Maya Python 2.7 / Python 3
 """
@@ -166,6 +167,97 @@ def save_json_file(filepath, data):
 
 
 # ============================================================================
+# 引用和命名空间工具函数
+# ============================================================================
+
+def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
+    """
+    自动将场景中所有 reference 导入为本地并删除命名空间前缀。
+    
+    :param also_nested: 是否同时删除子命名空间。
+    :param dry_run: 仅打印将要处理的对象，不实际修改。
+    :return: 处理的引用数量
+    """
+    # 获取所有 reference 节点（排除系统节点）
+    ref_nodes = [r for r in cmds.ls(type='reference') or [] if r not in ('sharedReferenceNode',)]
+    items = []
+    for r in ref_nodes:
+        try:
+            ns = cmds.referenceQuery(r, namespace=True)  # 形如 ":bbb_beiala"
+        except:
+            continue
+        ns = ns[1:] if ns and ns.startswith(':') else ns
+        try:
+            fpath = cmds.referenceQuery(r, filename=True)
+        except:
+            fpath = ''
+        if ns:
+            items.append((r, ns, fpath))
+
+    if not items:
+        cmds.warning('场景中没有检测到任何引用或命名空间。')
+        return 0
+
+    print('检测到以下引用，将进行导入与命名空间清理：')
+    for r, ns, fpath in items:
+        print(' - refNode: {} | 命名空间: {} | 文件: {}'.format(r, ns, fpath))
+
+    if dry_run:
+        print('\n[DRY RUN] 仅预览模式，不执行实际修改。')
+        return len(items)
+
+    processed = 0
+    # 循环处理每个引用
+    for refNode, ns, _ in items:
+        # 尝试加载引用（如果未加载）
+        try:
+            if not cmds.referenceQuery(refNode, isLoaded=True):
+                cmds.file(loadReference=refNode)
+        except:
+            pass
+
+        # 导入引用
+        try:
+            cmds.file(importReference=True, referenceNode=refNode)
+            print('已导入引用: {}'.format(refNode))
+            processed += 1
+        except RuntimeError:
+            try:
+                cmds.lockNode(refNode, lock=False)
+                cmds.file(importReference=True, referenceNode=refNode)
+                print('已解锁并导入引用: {}'.format(refNode))
+                processed += 1
+            except Exception as e2:
+                cmds.warning('导入失败 {}: {}'.format(refNode, e2))
+                continue
+
+        # 删除命名空间（包括子命名空间）
+        if ns and cmds.namespace(exists=ns):
+            try:
+                if also_nested:
+                    sub_ns = cmds.namespaceInfo(':{}'.format(ns), listOnlyNamespaces=True, recurse=True) or []
+                    sub_ns_sorted = sorted(
+                        [s[1:] if s.startswith(':') else s for s in sub_ns],
+                        key=lambda x: x.count(':'), reverse=True
+                    )
+                    for s in sub_ns_sorted:
+                        if s and cmds.namespace(exists=s):
+                            try:
+                                cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
+                                print('已删除子命名空间: {}'.format(s))
+                            except RuntimeError:
+                                pass
+                cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
+                print('已删除主命名空间: {}'.format(ns))
+            except RuntimeError as e:
+                cmds.warning('删除命名空间失败 {}: {}'.format(ns, str(e)))
+
+    print('\n所有引用已本地化，命名空间已清理完成！请保存场景为新文件。')
+    print('共处理 {} 个引用。'.format(processed))
+    return processed
+
+
+# ============================================================================
 # 主工具类
 # ============================================================================
 
@@ -173,7 +265,7 @@ class MocapTransferTool:
     """动作捕捉数据传递工具"""
     
     WINDOW_NAME = 'MocapToCtrl_Win'
-    WINDOW_TITLE = 'Mocap Motion To Ctrl v2.0'
+    WINDOW_TITLE = 'Mocap Motion To Ctrl v2.1'
     
     def __init__(self):
         """初始化"""
@@ -200,11 +292,29 @@ class MocapTransferTool:
         cmds.window(self.WINDOW_NAME, t=self.WINDOW_TITLE, w=550)
         main_layout = cmds.columnLayout('MocapToCtrl_cl', adj=True)
         
+        self._build_reference_frame(main_layout)
         self._build_namespace_frame(main_layout)
         self._build_preset_frame(main_layout)
         self._build_mapping_frame(main_layout)
         self._build_constraint_frame(main_layout)
         self._build_characterize_frame(main_layout)
+    
+    def _build_reference_frame(self, parent):
+        """引用工具区域"""
+        frame = cmds.frameLayout(p=parent, cll=True, cl=False, 
+                                  l='0. 引用工具 (Reference Tools)', bgc=[0.25, 0.25, 0.3])
+        
+        cmds.text(l='  将所有引用导入为本地并清理命名空间:', al='left', p=frame)
+        
+        cmds.rowLayout(nc=4, p=frame, adj=4)
+        self.ui['also_nested'] = cmds.checkBox(l='包含子命名空间', v=True)
+        cmds.button(w=120, h=30, l='预览 (Dry Run)', bgc=[0.4, 0.4, 0.5],
+                    c=partial(self._flatten_references, True))
+        cmds.button(w=180, h=30, l='导入引用并清理命名空间', bgc=[0.5, 0.35, 0.35],
+                    c=partial(self._flatten_references, False))
+        cmds.text(l='')
+        
+        cmds.separator(p=frame, h=5, st='none')
     
     def _build_namespace_frame(self, parent):
         """命名空间设置区域"""
@@ -371,6 +481,36 @@ class MocapTransferTool:
         obj = selection[0]
         name = obj.split(':')[-1] if ':' in obj else obj
         cmds.textFieldButtonGrp(field_name, e=True, tx=name)
+    
+    # ========================================================================
+    # 引用工具
+    # ========================================================================
+    
+    def _flatten_references(self, dry_run, *args):
+        """导入所有引用并清理命名空间"""
+        also_nested = cmds.checkBox(self.ui['also_nested'], q=True, v=True)
+        
+        if not dry_run:
+            # 确认对话框
+            result = cmds.confirmDialog(
+                title='确认操作',
+                message='此操作将导入所有引用并删除命名空间，\n操作不可撤销！\n\n建议先保存场景。\n\n是否继续？',
+                button=['继续', '取消'],
+                defaultButton='取消',
+                cancelButton='取消',
+                dismissString='取消'
+            )
+            if result != '继续':
+                return
+        
+        count = flatten_reference_and_drop_all_namespaces(also_nested=also_nested, dry_run=dry_run)
+        
+        if not dry_run and count > 0:
+            cmds.confirmDialog(
+                title='完成',
+                message='已处理 {} 个引用！\n\n请保存场景为新文件。'.format(count),
+                button=['确定']
+            )
     
     # ========================================================================
     # 预设管理
