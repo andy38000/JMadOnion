@@ -527,20 +527,27 @@ class MocapTransferTool:
         ctrl_field = 'add_tfb0{}'.format(idx)
         joint_field = 'add_tfb1{}'.format(idx)
         
-        cmds.rowLayout(row_name, p=self.ui['mapping_scroll'], nc=3, cw=[[1, 240], [2, 20], [3, 240]])
+        cmds.rowLayout(row_name, p=self.ui['mapping_scroll'], nc=4, cw=[[1, 210], [2, 20], [3, 210], [4, 50]])
         cmds.textFieldButtonGrp(
-            ctrl_field, cw=[[1, 1], [2, 180], [3, 50]],
+            ctrl_field, cw=[[1, 1], [2, 155], [3, 45]],
             l='', bl='<<',
             bc=partial(self._get_name_from_selection, ctrl_field)
         )
         cmds.text(l='->')
         cmds.textFieldButtonGrp(
-            joint_field, cw=[[1, 1], [2, 180], [3, 50]],
+            joint_field, cw=[[1, 1], [2, 155], [3, 45]],
             l='', bl='<<',
             bc=partial(self._get_name_from_selection, joint_field)
         )
+        cmds.button(l='X', w=40, bgc=[0.6, 0.3, 0.3],
+                    c=partial(self._delete_mapping_row, row_name))
         
         self.mapping_row_count += 1
+    
+    def _delete_mapping_row(self, row_name, *args):
+        """删除指定的映射行"""
+        if cmds.rowLayout(row_name, q=True, ex=True):
+            cmds.deleteUI(row_name)
     
     def _clean_mapping_rows(self):
         """清空映射行"""
@@ -559,12 +566,20 @@ class MocapTransferTool:
         if not child_array:
             return {'Ctrls': ctrls, 'Joints': joints}
         
-        for i in range(len(child_array)):
-            ctrl = cmds.textFieldButtonGrp('add_tfb0{}'.format(i), q=True, tx=True)
-            jnt = cmds.textFieldButtonGrp('add_tfb1{}'.format(i), q=True, tx=True)
-            if ctrl and jnt:
-                ctrls.append(ctrl)
-                joints.append(jnt)
+        for row in child_array:
+            # 从行名获取索引号 (add_rl0, add_rl1, ...)
+            if row.startswith('add_rl'):
+                idx = row[6:]  # 提取数字部分
+                ctrl_field = 'add_tfb0{}'.format(idx)
+                joint_field = 'add_tfb1{}'.format(idx)
+                
+                # 检查控件是否存在
+                if cmds.textFieldButtonGrp(ctrl_field, q=True, ex=True):
+                    ctrl = cmds.textFieldButtonGrp(ctrl_field, q=True, tx=True)
+                    jnt = cmds.textFieldButtonGrp(joint_field, q=True, tx=True)
+                    if ctrl and jnt:
+                        ctrls.append(ctrl)
+                        joints.append(jnt)
         
         return {'Ctrls': ctrls, 'Joints': joints}
     
