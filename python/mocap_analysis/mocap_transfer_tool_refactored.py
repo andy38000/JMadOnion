@@ -195,7 +195,7 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
 
     if not items:
         cmds.warning(u'场景中没有检测到任何引用或命名空间。')
-        return 0
+        return
 
     print(u'检测到以下引用，将进行导入与命名空间清理：')
     for r, ns, fpath in items:
@@ -203,9 +203,8 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
 
     if dry_run:
         print(u'\n[DRY RUN] 仅预览模式，不执行实际修改。')
-        return len(items)
+        return
 
-    processed = 0
     # 循环处理每个引用
     for refNode, ns, _ in items:
         # 尝试加载引用（如果未加载）
@@ -219,13 +218,11 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         try:
             cmds.file(importReference=True, referenceNode=refNode)
             print(u'已导入引用: %s' % refNode)
-            processed += 1
         except RuntimeError:
             try:
                 cmds.lockNode(refNode, lock=False)
                 cmds.file(importReference=True, referenceNode=refNode)
                 print(u'已解锁并导入引用: %s' % refNode)
-                processed += 1
             except Exception as e2:
                 cmds.warning(u'导入失败 %s: %s' % (refNode, e2))
                 continue
@@ -252,54 +249,64 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
                 cmds.warning(u'删除命名空间失败 %s: %s' % (ns, str(e)))
 
     print(u'\n所有引用已本地化，命名空间已清理完成！请保存场景为新文件。')
-    return processed
 
 
 def remove_all_namespaces():
     """
     删除场景中所有非默认命名空间（不导入引用）。
+    使用与 flatten_reference_and_drop_all_namespaces 相同的逻辑。
     """
     # 默认命名空间，不能删除
     default_namespaces = ['UI', 'shared']
     
-    def get_all_namespaces():
-        """递归获取所有命名空间"""
-        cmds.namespace(setNamespace=':')
-        all_ns = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
-        return [ns for ns in all_ns if ns not in default_namespaces]
+    # 获取根命名空间下的所有命名空间
+    cmds.namespace(setNamespace=':')
+    all_ns = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
+    namespaces = [ns for ns in all_ns if ns not in default_namespaces]
     
-    # 循环删除直到没有命名空间
-    max_iterations = 100  # 防止无限循环
+    if not namespaces:
+        print(u'场景中没有需要删除的命名空间。')
+        return 0
+    
+    print(u'检测到以下命名空间：')
+    for ns in namespaces:
+        print(u' - %s' % ns)
+    
     total_deleted = 0
     
-    for iteration in range(max_iterations):
-        namespaces = get_all_namespaces()
-        if not namespaces:
-            break
-            
-        # 按深度排序（从深到浅）
-        namespaces_sorted = sorted(namespaces, key=lambda x: x.count(':'), reverse=True)
-        
-        deleted_this_round = 0
-        for ns in namespaces_sorted:
-            try:
-                if cmds.namespace(exists=ns):
-                    cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
-                    print(u'已删除命名空间: %s' % ns)
-                    deleted_this_round += 1
-                    total_deleted += 1
-            except RuntimeError as e:
-                # 可能有嵌套，下一轮再处理
-                pass
-        
-        if deleted_this_round == 0:
-            # 没有删除任何命名空间，可能都删不掉了
-            remaining = get_all_namespaces()
-            if remaining:
-                cmds.warning(u'以下命名空间无法删除: %s' % remaining)
-            break
+    # 对每个顶级命名空间进行处理
+    root_ns_list = cmds.namespaceInfo(listOnlyNamespaces=True) or []
+    root_ns_list = [ns for ns in root_ns_list if ns not in default_namespaces]
     
-    print(u'共删除 %d 个命名空间。' % total_deleted)
+    for ns in root_ns_list:
+        if not cmds.namespace(exists=ns):
+            continue
+            
+        try:
+            # 获取子命名空间
+            sub_ns = cmds.namespaceInfo(':%s' % ns, listOnlyNamespaces=True, recurse=True) or []
+            sub_ns_sorted = sorted(
+                [s[1:] if s.startswith(':') else s for s in sub_ns],
+                key=lambda x: x.count(':'), reverse=True
+            )
+            # 先删除子命名空间
+            for s in sub_ns_sorted:
+                if s and s not in default_namespaces and cmds.namespace(exists=s):
+                    try:
+                        cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
+                        print(u'已删除子命名空间: %s' % s)
+                        total_deleted += 1
+                    except RuntimeError:
+                        pass
+            # 删除主命名空间
+            if cmds.namespace(exists=ns):
+                cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
+                print(u'已删除主命名空间: %s' % ns)
+                total_deleted += 1
+        except RuntimeError as e:
+            cmds.warning(u'删除命名空间失败 %s: %s' % (ns, str(e)))
+    
+    print(u'\n共删除 %d 个命名空间。' % total_deleted)
     return total_deleted
 
 
