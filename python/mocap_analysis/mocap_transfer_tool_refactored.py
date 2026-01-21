@@ -272,8 +272,9 @@ class MocapTransferTool:
         ]
         
         for label, callback in pose_buttons:
+            # Python 2.7 compatible: use default arg before *args
             cmds.button(w=100, h=30, bgc=[0.3, 0.367, 0.23], l=label,
-                        c=lambda *args, cb=callback: cb())
+                        c=partial(self._call_callback, callback))
     
     def _build_bake_frame(self, parent):
         """构建烘焙区域"""
@@ -284,6 +285,10 @@ class MocapTransferTool:
     # ========================================================================
     # UI 辅助方法
     # ========================================================================
+    
+    def _call_callback(self, callback, *args):
+        """调用回调函数的辅助方法 (Python 2.7 兼容)"""
+        return callback()
     
     def _get_namespace_from_selection(self, field_key):
         """从选择获取命名空间并填入指定字段"""
