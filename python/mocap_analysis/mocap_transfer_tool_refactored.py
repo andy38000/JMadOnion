@@ -318,10 +318,12 @@ def remove_namespace_only():
     return count
 
 
-def remove_all_references_from_scene():
+def remove_references_from_scene(prefix=''):
     """
-    移除场景中所有引用文件（不导入，直接删除引用）。
-    保留本地模型和绑定文件。
+    删除场景中的引用文件。
+    
+    :param prefix: 引用前缀名过滤，留空则删除所有引用
+    :return: 删除的引用数量
     """
     # 获取所有 reference 节点（排除系统节点）
     ref_nodes = [r for r in cmds.ls(type='reference') or [] if r not in ('sharedReferenceNode',)]
@@ -330,7 +332,7 @@ def remove_all_references_from_scene():
         print(u'场景中没有检测到任何引用。')
         return 0
     
-    print(u'检测到以下引用，将被移除：')
+    # 收集引用信息
     items = []
     for r in ref_nodes:
         try:
@@ -343,26 +345,45 @@ def remove_all_references_from_scene():
         except:
             fpath = ''
         items.append((r, ns, fpath))
+    
+    # 根据前缀过滤
+    if prefix:
+        filtered_items = []
+        for r, ns, fpath in items:
+            # 检查引用节点名、命名空间或文件路径是否包含前缀
+            if prefix in r or prefix in ns or prefix in fpath:
+                filtered_items.append((r, ns, fpath))
+        items = filtered_items
+    
+    if not items:
+        if prefix:
+            print(u'没有找到包含 "%s" 的引用。' % prefix)
+        else:
+            print(u'场景中没有检测到任何引用。')
+        return 0
+    
+    print(u'检测到以下引用，将被删除：')
+    for r, ns, fpath in items:
         print(u' - refNode: %s | 命名空间: %s | 文件: %s' % (r, ns, fpath))
     
     removed = 0
     for refNode, ns, fpath in items:
         try:
-            # 移除引用（不导入）
+            # 删除引用（不导入）
             cmds.file(referenceNode=refNode, removeReference=True)
-            print(u'已移除引用: %s' % refNode)
+            print(u'已删除引用: %s' % refNode)
             removed += 1
         except RuntimeError as e:
             try:
-                # 尝试解锁后移除
+                # 尝试解锁后删除
                 cmds.lockNode(refNode, lock=False)
                 cmds.file(referenceNode=refNode, removeReference=True)
-                print(u'已解锁并移除引用: %s' % refNode)
+                print(u'已解锁并删除引用: %s' % refNode)
                 removed += 1
             except Exception as e2:
-                cmds.warning(u'移除引用失败 %s: %s' % (refNode, e2))
+                cmds.warning(u'删除引用失败 %s: %s' % (refNode, e2))
     
-    print(u'\n共移除 %d 个引用。' % removed)
+    print(u'\n共删除 %d 个引用。' % removed)
     return removed
 
 
@@ -429,12 +450,13 @@ class MocapTransferTool:
                     c=partial(self._call_callback, self._remove_namespaces_only))
         cmds.text(l='')
         
-        # 删除引用文件按钮（保留本地文件）
-        cmds.rowLayout(nc=3, p=frame, adj=3)
-        cmds.text(l='  删除引用文件(保留本地绑定):', w=200, al='left')
-        cmds.button(w=180, h=28, l='删除所有引用文件', bgc=[0.5, 0.4, 0.35],
-                    c=partial(self._call_callback, self._remove_all_references))
-        cmds.text(l='')
+        # 删除指定引用文件
+        cmds.rowLayout(nc=3, p=frame, adj=2)
+        cmds.text(l='  删除指定引用(输入前缀名):', w=180, al='left')
+        self.ui['ref_prefix'] = cmds.textField(w=200, tx='',
+            ann=u'输入引用前缀名，如: model_14001_skin_fs01，留空则删除所有引用')
+        cmds.button(w=100, h=24, l='删除引用', bgc=[0.5, 0.4, 0.35],
+                    c=partial(self._call_callback, self._remove_references_by_prefix))
         
         cmds.separator(p=frame, h=5, st='none')
     
@@ -651,12 +673,19 @@ class MocapTransferTool:
             button=[u'确定']
         )
     
-    def _remove_all_references(self):
-        """删除所有引用文件（保留本地模型绑定）"""
+    def _remove_references_by_prefix(self):
+        """根据前缀名删除引用文件"""
+        prefix = cmds.textField(self.ui['ref_prefix'], q=True, tx=True).strip()
+        
+        if prefix:
+            msg = u'此操作将删除包含 "%s" 的引用文件。\n\n其他引用和本地模型将被保留。' % prefix
+        else:
+            msg = u'未输入前缀名，将删除所有引用文件。\n\n本地模型和绑定将被保留。'
+        
         # 确认对话框
         result = cmds.confirmDialog(
             title=u'确认操作',
-            message=u'此操作将从场景中删除所有引用文件，\n引用的内容将被删除。\n\n本地模型和绑定将被保留。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
+            message=msg + u'\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
             button=[u'继续', u'取消'],
             defaultButton=u'取消',
             cancelButton=u'取消',
@@ -666,13 +695,16 @@ class MocapTransferTool:
             return
         
         print('=' * 50)
-        print(u'开始删除引用文件...')
-        count = remove_all_references_from_scene()
+        if prefix:
+            print(u'开始删除包含 "%s" 的引用文件...' % prefix)
+        else:
+            print(u'开始删除所有引用文件...')
+        count = remove_references_from_scene(prefix)
         print('=' * 50)
         
         cmds.confirmDialog(
             title=u'完成',
-            message=u'已删除 %d 个引用文件！\n\n本地模型绑定已保留。\n请检查场景并保存。' % count,
+            message=u'已删除 %d 个引用文件！\n\n请检查场景并保存。' % count,
             button=[u'确定']
         )
     
