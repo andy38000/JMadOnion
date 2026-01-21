@@ -73,7 +73,7 @@ class MocapConfig:
     @classmethod
     def get_preset_path(cls, preset_name):
         """获取预设文件的完整路径"""
-        filename = cls.PRESETS.get(preset_name, f'{preset_name}.json')
+        filename = cls.PRESETS.get(preset_name, '{}.json'.format(preset_name))
         return os.path.join(cls.JOINT_LOC_DIR, filename)
 
 
@@ -145,7 +145,8 @@ def load_json_file(filepath):
     except IOError as e:
         cmds.warning("无法读取文件 {}: {}".format(filepath, e))
         return None
-    except json.JSONDecodeError as e:
+    except ValueError as e:
+        # Python 2.7 uses ValueError for JSON decode errors
         cmds.warning("JSON解析错误 {}: {}".format(filepath, e))
         return None
 
