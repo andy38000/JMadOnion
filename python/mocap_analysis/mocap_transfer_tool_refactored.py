@@ -227,9 +227,10 @@ class MocapTransferTool:
         frame = cmds.frameLayout(p=parent, cll=True, cl=False, l='2. 映射预设 (Presets)')
         
         # 预设选择下拉框
-        cmds.rowLayout(nc=4, adj=1, p=frame)
-        self.ui['preset_menu'] = cmds.optionMenuGrp(
-            l='选择预设:', cw=[[1, 70], [2, 200]],
+        cmds.rowLayout(nc=5, adj=2, p=frame)
+        cmds.text(l='选择预设:', w=70)
+        self.ui['preset_menu'] = cmds.optionMenu(
+            w=200,
             cc=partial(self._on_preset_selected)
         )
         cmds.menuItem(l='-- 选择预设 --')
@@ -378,32 +379,32 @@ class MocapTransferTool:
     def _refresh_preset_menu(self):
         """刷新预设下拉菜单"""
         menu = self.ui['preset_menu']
-        # 获取菜单项
-        menu_items = cmds.optionMenuGrp(menu, q=True, ill=True)
+        
+        # 获取并删除现有菜单项
+        menu_items = cmds.optionMenu(menu, q=True, ill=True)
         if menu_items:
             for item in menu_items:
                 cmds.deleteUI(item)
         
         # 添加默认选项
-        popup_menu = cmds.optionMenuGrp(menu, q=True, pm=True)
-        cmds.menuItem(l='-- 选择预设 --', p=popup_menu)
+        cmds.menuItem(l='-- 选择预设 --', p=menu)
         
         # 添加用户预设
         user_presets = MocapConfig.list_user_presets()
         if user_presets:
-            cmds.menuItem(divider=True, p=popup_menu)
-            cmds.menuItem(l='--- 用户预设 ---', en=False, p=popup_menu)
+            cmds.menuItem(divider=True, p=menu)
+            cmds.menuItem(l='--- 用户预设 ---', en=False, p=menu)
             for preset in user_presets:
-                cmds.menuItem(l=preset, p=popup_menu)
+                cmds.menuItem(l=preset, p=menu)
         
         # 添加内置预设
-        cmds.menuItem(divider=True, p=popup_menu)
-        cmds.menuItem(l='--- 内置预设 ---', en=False, p=popup_menu)
+        cmds.menuItem(divider=True, p=menu)
+        cmds.menuItem(l='--- 内置预设 ---', en=False, p=menu)
         for preset in MocapConfig.BUILTIN_PRESETS.keys():
-            cmds.menuItem(l='[内置] ' + preset, p=popup_menu)
+            cmds.menuItem(l='[内置] ' + preset, p=menu)
         
-        # 重置选择
-        cmds.optionMenuGrp(menu, e=True, sl=1)
+        # 重置选择到第一项
+        cmds.optionMenu(menu, e=True, sl=1)
     
     def _on_preset_selected(self, *args):
         """预设选择变化时自动加载"""
@@ -411,7 +412,7 @@ class MocapTransferTool:
     
     def _load_selected_preset(self):
         """加载选中的预设"""
-        selected = cmds.optionMenuGrp(self.ui['preset_menu'], q=True, v=True)
+        selected = cmds.optionMenu(self.ui['preset_menu'], q=True, v=True)
         
         if selected.startswith('--') or selected.startswith('---'):
             return
@@ -486,7 +487,7 @@ class MocapTransferTool:
     
     def _delete_selected_preset(self):
         """删除选中的预设"""
-        selected = cmds.optionMenuGrp(self.ui['preset_menu'], q=True, v=True)
+        selected = cmds.optionMenu(self.ui['preset_menu'], q=True, v=True)
         
         if selected.startswith('--') or selected.startswith('---'):
             cmds.warning("请先选择一个预设")
