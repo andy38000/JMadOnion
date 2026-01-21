@@ -318,12 +318,10 @@ def remove_namespace_only():
     return count
 
 
-def remove_references_from_scene(prefix=''):
+def remove_all_references():
     """
-    删除场景中的引用文件。
-    
-    :param prefix: 引用前缀名过滤，留空则删除所有引用
-    :return: 删除的引用数量
+    删除场景中所有引用文件（不导入，直接删除）。
+    保留本地模型和绑定文件。
     """
     # 获取所有 reference 节点（排除系统节点）
     ref_nodes = [r for r in cmds.ls(type='reference') or [] if r not in ('sharedReferenceNode',)]
@@ -345,22 +343,6 @@ def remove_references_from_scene(prefix=''):
         except:
             fpath = ''
         items.append((r, ns, fpath))
-    
-    # 根据前缀过滤
-    if prefix:
-        filtered_items = []
-        for r, ns, fpath in items:
-            # 检查引用节点名、命名空间或文件路径是否包含前缀
-            if prefix in r or prefix in ns or prefix in fpath:
-                filtered_items.append((r, ns, fpath))
-        items = filtered_items
-    
-    if not items:
-        if prefix:
-            print(u'没有找到包含 "%s" 的引用。' % prefix)
-        else:
-            print(u'场景中没有检测到任何引用。')
-        return 0
     
     print(u'检测到以下引用，将被删除：')
     for r, ns, fpath in items:
@@ -450,13 +432,12 @@ class MocapTransferTool:
                     c=partial(self._call_callback, self._remove_namespaces_only))
         cmds.text(l='')
         
-        # 删除指定引用文件
-        cmds.rowLayout(nc=3, p=frame, adj=2)
-        cmds.text(l='  删除指定引用(输入前缀名):', w=180, al='left')
-        self.ui['ref_prefix'] = cmds.textField(w=200, tx='',
-            ann=u'输入引用前缀名，如: model_14001_skin_fs01，留空则删除所有引用')
-        cmds.button(w=100, h=24, l='删除引用', bgc=[0.5, 0.4, 0.35],
-                    c=partial(self._call_callback, self._remove_references_by_prefix))
+        # 删除引用按钮
+        cmds.rowLayout(nc=3, p=frame, adj=3)
+        cmds.text(l='  删除引用(保留本地模型绑定):', w=200, al='left')
+        cmds.button(w=180, h=28, l='删除所有引用', bgc=[0.5, 0.4, 0.35],
+                    c=partial(self._call_callback, self._remove_all_references))
+        cmds.text(l='')
         
         cmds.separator(p=frame, h=5, st='none')
     
@@ -571,29 +552,6 @@ class MocapTransferTool:
                     c=partial(self._call_callback, self._do_bake))
         cmds.text(l='')
     
-    def _build_characterize_frame(self, parent):
-        """角色化设置区域"""
-        frame = cmds.frameLayout(p=parent, cll=True, cl=True, 
-                                  l='5. 角色化预设 (Characterize) - 点击展开')
-        
-        cmds.text(l='  应用骨骼姿态预设:', al='left', p=frame)
-        cmds.rowLayout(nc=5, p=frame)
-        
-        char_buttons = [
-            ('J1', 'J1_jointsLoc'),
-            ('J5', 'J5lu'),
-            ('UE4 Lydia', 'UE4Lydia_jointDeta'),
-        ]
-        
-        for label, preset in char_buttons:
-            cmds.button(w=100, h=28, bgc=[0.4, 0.4, 0.45], l=label,
-                        c=partial(self._apply_characterize, preset))
-        
-        cmds.button(w=100, h=28, l='J5 Match',
-                    c=partial(self._call_callback, self.j5_characterize))
-        cmds.button(w=100, h=28, l='Lydia Match',
-                    c=partial(self._call_callback, self.lydia_characterize))
-    
     # ========================================================================
     # 回调辅助
     # ========================================================================
@@ -673,19 +631,12 @@ class MocapTransferTool:
             button=[u'确定']
         )
     
-    def _remove_references_by_prefix(self):
-        """根据前缀名删除引用文件"""
-        prefix = cmds.textField(self.ui['ref_prefix'], q=True, tx=True).strip()
-        
-        if prefix:
-            msg = u'此操作将删除包含 "%s" 的引用文件。\n\n其他引用和本地模型将被保留。' % prefix
-        else:
-            msg = u'未输入前缀名，将删除所有引用文件。\n\n本地模型和绑定将被保留。'
-        
+    def _remove_all_references(self):
+        """删除所有引用（保留本地模型绑定）"""
         # 确认对话框
         result = cmds.confirmDialog(
             title=u'确认操作',
-            message=msg + u'\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
+            message=u'此操作将删除场景中所有引用文件。\n\n引用的内容将被删除，本地模型绑定将保留。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
             button=[u'继续', u'取消'],
             defaultButton=u'取消',
             cancelButton=u'取消',
@@ -695,16 +646,13 @@ class MocapTransferTool:
             return
         
         print('=' * 50)
-        if prefix:
-            print(u'开始删除包含 "%s" 的引用文件...' % prefix)
-        else:
-            print(u'开始删除所有引用文件...')
-        count = remove_references_from_scene(prefix)
+        print(u'开始删除所有引用...')
+        count = remove_all_references()
         print('=' * 50)
         
         cmds.confirmDialog(
             title=u'完成',
-            message=u'已删除 %d 个引用文件！\n\n请检查场景并保存。' % count,
+            message=u'已删除 %d 个引用！\n\n本地模型绑定已保留。\n请检查场景并保存。' % count,
             button=[u'确定']
         )
     
@@ -1071,88 +1019,6 @@ class MocapTransferTool:
                     cmds.setAttr('{}.FKIKBlend'.format(full_name), 0)
                 except RuntimeError:
                     pass
-    
-    # ========================================================================
-    # 角色化
-    # ========================================================================
-    
-    def _apply_characterize(self, preset_key, *args):
-        """应用角色化预设"""
-        path = MocapConfig.get_characterize_path(preset_key)
-        
-        if not os.path.exists(path):
-            cmds.warning("角色化预设不存在: {}".format(path))
-            return
-        
-        location_data = load_json_file(path)
-        if not location_data:
-            return
-        
-        jnt_ns = self._get_joint_namespace()
-        
-        cmds.undoInfo(openChunk=True)
-        try:
-            for joint_name, transform in location_data.items():
-                full_name = '{}{}'.format(jnt_ns, joint_name)
-                if cmds.objExists(full_name):
-                    set_transform(full_name, transform)
-            print("角色化完成: {}".format(preset_key))
-        finally:
-            cmds.undoInfo(closeChunk=True)
-    
-    def j5_characterize(self):
-        """J5角色化匹配"""
-        jnt_ns = self._get_joint_namespace()
-        ctrl_ns = self._get_ctrl_namespace()
-        
-        base_root = '{}Joints'.format(ctrl_ns)
-        mocap_root = '{}Joints'.format(jnt_ns)
-        
-        if not cmds.objExists(base_root) or not cmds.objExists(mocap_root):
-            cmds.warning("找不到骨骼根节点")
-            return
-        
-        base_joints = cmds.listRelatives(base_root, c=True, ad=True, type='joint', f=True) or []
-        mocap_joints = cmds.listRelatives(mocap_root, c=True, ad=True, type='joint', f=True) or []
-        
-        cmds.undoInfo(openChunk=True)
-        try:
-            for mocap_jnt in mocap_joints:
-                mocap_short = mocap_jnt.split(':')[-1]
-                for attr in ['rx', 'ry', 'rz']:
-                    cmds.setAttr('{}.{}'.format(mocap_jnt, attr), 0)
-                
-                for base_jnt in base_joints:
-                    base_short = base_jnt.split(':')[-1]
-                    if base_short == mocap_short == 'Hips':
-                        constraint = cmds.pointConstraint(base_jnt, mocap_jnt, mo=False, w=1)
-                        cmds.delete(constraint)
-        finally:
-            cmds.undoInfo(closeChunk=True)
-    
-    def lydia_characterize(self):
-        """Lydia角色化匹配"""
-        jnt_ns = self._get_joint_namespace()
-        ctrl_ns = self._get_ctrl_namespace()
-        
-        root_joint = '{}root'.format(ctrl_ns)
-        if not cmds.objExists(root_joint):
-            cmds.warning("找不到根骨骼: {}".format(root_joint))
-            return
-        
-        joint_list = cmds.listRelatives(root_joint, c=True, ad=True, type='joint') or []
-        
-        cmds.undoInfo(openChunk=True)
-        try:
-            for jnt in joint_list:
-                src_jnt = '{}{}'.format(ctrl_ns, jnt)
-                dst_jnt = '{}{}'.format(jnt_ns, jnt)
-                
-                if cmds.objExists(src_jnt) and cmds.objExists(dst_jnt):
-                    transform = get_transform(src_jnt)
-                    set_transform(dst_jnt, transform)
-        finally:
-            cmds.undoInfo(closeChunk=True)
 
 
 # ============================================================================
