@@ -429,10 +429,10 @@ class MocapTransferTool:
                     c=partial(self._call_callback, self._remove_namespaces_only))
         cmds.text(l='')
         
-        # 移除引用按钮（保留本地文件）
+        # 删除引用文件按钮（保留本地文件）
         cmds.rowLayout(nc=3, p=frame, adj=3)
-        cmds.text(l='  移除引用(保留本地模型绑定):', w=200, al='left')
-        cmds.button(w=180, h=28, l='移除所有引用', bgc=[0.5, 0.4, 0.35],
+        cmds.text(l='  删除引用文件(保留本地绑定):', w=200, al='left')
+        cmds.button(w=180, h=28, l='删除所有引用文件', bgc=[0.5, 0.4, 0.35],
                     c=partial(self._call_callback, self._remove_all_references))
         cmds.text(l='')
         
@@ -652,11 +652,11 @@ class MocapTransferTool:
         )
     
     def _remove_all_references(self):
-        """移除所有引用（保留本地模型绑定）"""
+        """删除所有引用文件（保留本地模型绑定）"""
         # 确认对话框
         result = cmds.confirmDialog(
             title=u'确认操作',
-            message=u'此操作将移除场景中所有引用文件，\n引用的模型将从场景中删除。\n\n本地模型和绑定文件将保留。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
+            message=u'此操作将从场景中删除所有引用文件，\n引用的内容将被删除。\n\n本地模型和绑定将被保留。\n\n操作不可撤销！建议先保存场景。\n\n是否继续？',
             button=[u'继续', u'取消'],
             defaultButton=u'取消',
             cancelButton=u'取消',
@@ -666,13 +666,13 @@ class MocapTransferTool:
             return
         
         print('=' * 50)
-        print(u'开始移除引用...')
+        print(u'开始删除引用文件...')
         count = remove_all_references_from_scene()
         print('=' * 50)
         
         cmds.confirmDialog(
             title=u'完成',
-            message=u'已移除 %d 个引用！\n\n请检查场景并保存。' % count,
+            message=u'已删除 %d 个引用文件！\n\n本地模型绑定已保留。\n请检查场景并保存。' % count,
             button=[u'确定']
         )
     
