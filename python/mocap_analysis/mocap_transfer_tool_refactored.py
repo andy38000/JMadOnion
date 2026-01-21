@@ -259,52 +259,53 @@ def remove_all_namespaces():
     # 默认命名空间，不能删除
     default_namespaces = ['UI', 'shared']
     
-    # 获取根命名空间下的所有命名空间
+    # 切换到根命名空间
     cmds.namespace(setNamespace=':')
+    
+    # 获取所有命名空间（递归）
     all_ns = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
     namespaces = [ns for ns in all_ns if ns not in default_namespaces]
+    
+    print(u'[DEBUG] 检测到的所有命名空间: %s' % all_ns)
+    print(u'[DEBUG] 过滤后的命名空间: %s' % namespaces)
     
     if not namespaces:
         print(u'场景中没有需要删除的命名空间。')
         return 0
     
-    print(u'检测到以下命名空间：')
+    print(u'检测到以下命名空间需要删除：')
     for ns in namespaces:
         print(u' - %s' % ns)
     
     total_deleted = 0
     
-    # 对每个顶级命名空间进行处理
-    root_ns_list = cmds.namespaceInfo(listOnlyNamespaces=True) or []
-    root_ns_list = [ns for ns in root_ns_list if ns not in default_namespaces]
+    # 按深度排序所有命名空间（从深到浅）
+    namespaces_sorted = sorted(namespaces, key=lambda x: x.count(':'), reverse=True)
     
-    for ns in root_ns_list:
-        if not cmds.namespace(exists=ns):
+    print(u'[DEBUG] 排序后的命名空间: %s' % namespaces_sorted)
+    
+    # 删除所有命名空间
+    for ns in namespaces_sorted:
+        if ns in default_namespaces:
             continue
-            
         try:
-            # 获取子命名空间
-            sub_ns = cmds.namespaceInfo(':%s' % ns, listOnlyNamespaces=True, recurse=True) or []
-            sub_ns_sorted = sorted(
-                [s[1:] if s.startswith(':') else s for s in sub_ns],
-                key=lambda x: x.count(':'), reverse=True
-            )
-            # 先删除子命名空间
-            for s in sub_ns_sorted:
-                if s and s not in default_namespaces and cmds.namespace(exists=s):
-                    try:
-                        cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
-                        print(u'已删除子命名空间: %s' % s)
-                        total_deleted += 1
-                    except RuntimeError:
-                        pass
-            # 删除主命名空间
+            # 检查是否存在
             if cmds.namespace(exists=ns):
                 cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
-                print(u'已删除主命名空间: %s' % ns)
+                print(u'已删除命名空间: %s' % ns)
+                total_deleted += 1
+            elif cmds.namespace(exists=':%s' % ns):
+                cmds.namespace(removeNamespace=':%s' % ns, mergeNamespaceWithParent=True)
+                print(u'已删除命名空间: :%s' % ns)
                 total_deleted += 1
         except RuntimeError as e:
-            cmds.warning(u'删除命名空间失败 %s: %s' % (ns, str(e)))
+            print(u'[DEBUG] 删除失败 %s: %s' % (ns, str(e)))
+    
+    # 如果还有剩余，再检查一次
+    remaining = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
+    remaining = [ns for ns in remaining if ns not in default_namespaces]
+    if remaining:
+        print(u'[DEBUG] 剩余命名空间: %s' % remaining)
     
     print(u'\n共删除 %d 个命名空间。' % total_deleted)
     return total_deleted
@@ -317,9 +318,10 @@ def remove_namespace_only():
     """
     print('=' * 50)
     print(u'开始清理命名空间...')
+    print(u'[DEBUG] 调用 remove_all_namespaces()')
     count = remove_all_namespaces()
     print('=' * 50)
-    print(u'命名空间清理完成！')
+    print(u'命名空间清理完成！共删除 %d 个' % count)
     return count
 
 
