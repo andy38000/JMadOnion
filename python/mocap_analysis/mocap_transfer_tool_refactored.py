@@ -208,14 +208,9 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         return len(items)
 
     processed = 0
-    namespaces_to_remove = []
     
-    # 第一步：导入所有引用
-    print('\n--- 第一步：导入引用 ---')
+    # 循环处理每个引用
     for refNode, ns, _ in items:
-        # 记录命名空间待删除
-        namespaces_to_remove.append(ns)
-        
         # 尝试加载引用（如果未加载）
         try:
             if not cmds.referenceQuery(refNode, isLoaded=True):
@@ -226,20 +221,41 @@ def flatten_reference_and_drop_all_namespaces(also_nested=True, dry_run=False):
         # 导入引用
         try:
             cmds.file(importReference=True, referenceNode=refNode)
-            print('  [OK] 已导入引用: {}'.format(refNode))
+            print('[OK] 已导入引用: {}'.format(refNode))
             processed += 1
         except RuntimeError:
             try:
                 cmds.lockNode(refNode, lock=False)
                 cmds.file(importReference=True, referenceNode=refNode)
-                print('  [OK] 已解锁并导入引用: {}'.format(refNode))
+                print('[OK] 已解锁并导入引用: {}'.format(refNode))
                 processed += 1
             except Exception as e2:
-                cmds.warning('  [FAIL] 导入失败 {}: {}'.format(refNode, e2))
+                cmds.warning('[FAIL] 导入失败 {}: {}'.format(refNode, e2))
+                continue
 
-    # 第二步：删除所有命名空间
-    print('\n--- 第二步：删除命名空间 ---')
-    remove_all_namespaces(also_nested=also_nested)
+        # 删除命名空间（包括子命名空间）
+        if ns and cmds.namespace(exists=ns):
+            try:
+                if also_nested:
+                    # 获取子命名空间，使用 :%s 格式
+                    sub_ns = cmds.namespaceInfo(':{}'.format(ns), listOnlyNamespaces=True, recurse=True) or []
+                    # 按深度排序（从深到浅）
+                    sub_ns_sorted = sorted(
+                        [s[1:] if s.startswith(':') else s for s in sub_ns],
+                        key=lambda x: x.count(':'), reverse=True
+                    )
+                    for s in sub_ns_sorted:
+                        if s and cmds.namespace(exists=s):
+                            try:
+                                cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
+                                print('[OK] 已删除子命名空间: {}'.format(s))
+                            except RuntimeError:
+                                pass
+                # 删除主命名空间
+                cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
+                print('[OK] 已删除主命名空间: {}'.format(ns))
+            except RuntimeError as e:
+                cmds.warning('[FAIL] 删除命名空间失败 {}: {}'.format(ns, str(e)))
 
     print('\n' + '=' * 50)
     print('所有引用已本地化，命名空间已清理完成！')
@@ -257,45 +273,53 @@ def remove_all_namespaces(also_nested=True):
     # 默认命名空间，不能删除
     default_namespaces = ['UI', 'shared']
     
-    # 获取所有命名空间
-    all_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True) or []
+    # 切换到根命名空间
+    cmds.namespace(setNamespace=':')
     
-    # 过滤掉默认命名空间
-    namespaces = [ns for ns in all_namespaces if ns not in default_namespaces]
+    # 获取根下的所有命名空间
+    root_namespaces = cmds.namespaceInfo(listOnlyNamespaces=True) or []
+    root_namespaces = [ns for ns in root_namespaces if ns not in default_namespaces]
     
-    if not namespaces:
-        print('  没有需要删除的命名空间。')
-        return
+    if not root_namespaces:
+        print('没有需要删除的命名空间。')
+        return 0
     
-    print('  发现 {} 个命名空间待删除: {}'.format(len(namespaces), namespaces))
-    
-    # 按嵌套深度排序（从深到浅删除）
-    namespaces_sorted = sorted(namespaces, key=lambda x: x.count(':'), reverse=True)
+    print('发现 {} 个顶级命名空间: {}'.format(len(root_namespaces), root_namespaces))
     
     deleted_count = 0
-    for ns in namespaces_sorted:
-        # 再次检查是否存在（可能已被父级删除）
-        if ns in default_namespaces:
+    
+    for ns in root_namespaces:
+        if not cmds.namespace(exists=ns):
             continue
             
         try:
-            # 检查命名空间是否存在
+            if also_nested:
+                # 获取该命名空间下的所有子命名空间
+                sub_ns = cmds.namespaceInfo(':{}'.format(ns), listOnlyNamespaces=True, recurse=True) or []
+                # 按深度排序（从深到浅）
+                sub_ns_sorted = sorted(
+                    [s[1:] if s.startswith(':') else s for s in sub_ns],
+                    key=lambda x: x.count(':'), reverse=True
+                )
+                for s in sub_ns_sorted:
+                    if s and s not in default_namespaces and cmds.namespace(exists=s):
+                        try:
+                            cmds.namespace(removeNamespace=s, mergeNamespaceWithParent=True)
+                            print('[OK] 已删除子命名空间: {}'.format(s))
+                            deleted_count += 1
+                        except RuntimeError as e:
+                            cmds.warning('[FAIL] 删除子命名空间失败 {}: {}'.format(s, str(e)))
+            
+            # 删除主命名空间
             if cmds.namespace(exists=ns):
                 cmds.namespace(removeNamespace=ns, mergeNamespaceWithParent=True)
-                print('  [OK] 已删除命名空间: {}'.format(ns))
+                print('[OK] 已删除命名空间: {}'.format(ns))
                 deleted_count += 1
+                
         except RuntimeError as e:
-            # 尝试使用完整路径
-            try:
-                full_ns = ':' + ns if not ns.startswith(':') else ns
-                if cmds.namespace(exists=full_ns):
-                    cmds.namespace(removeNamespace=full_ns, mergeNamespaceWithParent=True)
-                    print('  [OK] 已删除命名空间: {}'.format(full_ns))
-                    deleted_count += 1
-            except RuntimeError as e2:
-                cmds.warning('  [FAIL] 删除命名空间失败 {}: {}'.format(ns, str(e2)))
+            cmds.warning('[FAIL] 删除命名空间失败 {}: {}'.format(ns, str(e)))
     
-    print('  共删除 {} 个命名空间。'.format(deleted_count))
+    print('共删除 {} 个命名空间。'.format(deleted_count))
     return deleted_count
 
 
@@ -308,7 +332,7 @@ def remove_namespace_only():
     print('开始清理命名空间...')
     count = remove_all_namespaces(also_nested=True)
     print('=' * 50)
-    print('命名空间清理完成！')
+    print('命名空间清理完成！共删除 {} 个命名空间。'.format(count))
     return count
 
 
