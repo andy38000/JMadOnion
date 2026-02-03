@@ -4,7 +4,7 @@ Animation Library - By Pitaya37
 Python 2/3 compatible version
 """
 
-from __future__ import print_function, division, absolute_import
+from __future__ import print_function, division, absolute_import, unicode_literals
 
 import sys
 import os
@@ -12,14 +12,35 @@ import json
 import shutil
 import logging
 import tempfile
+import io
+import codecs
 
 # Python 2/3 compatibility
 PY2 = sys.version_info[0] == 2
 
 if PY2:
     string_types = basestring
+    text_type = unicode
+    # Reload sys to set default encoding to utf-8 for Python 2
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
 else:
     string_types = str
+    text_type = str
+
+
+def _safe_str(s):
+    """Convert string to safe format for logging/printing in Python 2/3"""
+    if s is None:
+        return ''
+    if PY2:
+        if isinstance(s, unicode):
+            return s.encode('utf-8', errors='replace')
+        return str(s)
+    else:
+        if isinstance(s, bytes):
+            return s.decode('utf-8', errors='replace')
+        return str(s)
 
 # Try PySide2 first (Maya 2017+), then fall back to PySide (older Maya)
 try:
@@ -53,6 +74,13 @@ def _ensure_dir(path):
     """Create directory if it doesn't exist (Python 2/3 compatible)"""
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+def _open_file(path, mode='r'):
+    """Open file with UTF-8 encoding for Python 2/3 compatibility"""
+    if 'b' in mode:
+        return open(path, mode)
+    return io.open(path, mode, encoding='utf-8')
 
 
 def maya_main_window():
@@ -108,14 +136,14 @@ class AnimationPreviewWidget(QtWidgets.QWidget):
                             self.image_sequence.append(pixmap.toImage())
                             successful_load = True
                         else:
-                            logging.warning("Could not load image: {}".format(image_path))
+                            logging.warning(_safe_str("Could not load image: {}".format(image_path)))
                 else:
                     if os.path.exists(image_path):
-                        logging.warning("Image file exists but is empty: {}".format(image_path))
+                        logging.warning(_safe_str("Image file exists but is empty: {}".format(image_path)))
                     else:
-                        logging.warning("Image file does not exist: {}".format(image_path))
+                        logging.warning(_safe_str("Image file does not exist: {}".format(image_path)))
             except Exception as e:
-                logging.warning("Error processing image {}: {}".format(image_path, str(e)))
+                logging.warning(_safe_str("Error processing image {}: {}".format(image_path, str(e))))
         
         if not successful_load:
             # Create a blank image with text as a placeholder
@@ -825,7 +853,7 @@ class AnimationDataUI(QtWidgets.QDialog):
         self.group_boxes.clear()
         
         if not os.path.exists(self.file_path):
-            logging.info("Directory not found: {}".format(self.file_path))
+            logging.info(_safe_str("Directory not found: {}".format(self.file_path)))
             _ensure_dir(self.file_path)
             self.status_label.setText("Created new library at {}".format(self.file_path))
             return
@@ -850,15 +878,15 @@ class AnimationDataUI(QtWidgets.QDialog):
                 anim_file = os.path.join(anim_path, "animation_data.json")
                 if os.path.exists(anim_file):
                     try:
-                        with open(anim_file, 'r') as f:
+                        with _open_file(anim_file, 'r') as f:
                             data = json.load(f)
                             is_pose = data.get("is_pose", False)
                     except Exception as e:
-                        logging.warning("Error reading animation data: {}".format(str(e)))
+                        logging.warning(_safe_str("Error reading animation data: {}".format(str(e))))
                 
                 preview_dir = os.path.join(anim_path, "{}_preview".format(anim_name))
                 if not os.path.exists(preview_dir):
-                    logging.warning("Preview folder not found for {}/{}".format(group_name, anim_name))
+                    logging.warning(_safe_str("Preview folder not found for {}/{}".format(group_name, anim_name)))
                     continue
                 
                 image_files = sorted([
@@ -872,7 +900,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                     group_items += 1
                     total_items += 1
                 else:
-                    logging.warning("No preview images found for {}/{}".format(group_name, anim_name))
+                    logging.warning(_safe_str("No preview images found for {}/{}".format(group_name, anim_name)))
         
         self.status_label.setText("Library loaded: {} animations in {} categories".format(total_items, len(self.group_boxes)))
 
@@ -1193,8 +1221,8 @@ class AnimationDataUI(QtWidgets.QDialog):
             
             # Save with pretty formatting
             try:
-                with open(os.path.join(anim_folder, "animation_data.json"), "w") as f:
-                    json.dump(data_to_save, f, indent=2)
+                with _open_file(os.path.join(anim_folder, "animation_data.json"), "w") as f:
+                    json.dump(data_to_save, f, indent=2, ensure_ascii=False)
                     
                 self.status_label.setText("Saved animation data to {}".format(anim_folder))
             except Exception as e:
@@ -1617,7 +1645,7 @@ class AnimationDataUI(QtWidgets.QDialog):
 
     def create_thumbnail_button(self, group_name, anim_name, image_sequence, is_pose=False):
         if not image_sequence:
-            logging.warning("No preview files found for {}/{}".format(group_name, anim_name))
+            logging.warning(_safe_str("No preview files found for {}/{}".format(group_name, anim_name)))
             return
         
         # Validate image sequence and print details for debugging
@@ -1626,14 +1654,14 @@ class AnimationDataUI(QtWidgets.QDialog):
             if os.path.exists(img):
                 valid_images.append(img)
             else:
-                logging.warning("Image file does not exist: {}".format(img))
+                logging.warning(_safe_str("Image file does not exist: {}".format(img)))
         
         if not valid_images:
-            logging.warning("No valid preview images for {}/{}".format(group_name, anim_name))
-            logging.info("Preview directory: {}".format(os.path.dirname(image_sequence[0] if image_sequence else '')))
+            logging.warning(_safe_str("No valid preview images for {}/{}".format(group_name, anim_name)))
+            logging.info(_safe_str("Preview directory: {}".format(os.path.dirname(image_sequence[0] if image_sequence else ''))))
             return
         
-        logging.info("Creating thumbnail for {}/{} with {} images".format(group_name, anim_name, len(valid_images)))
+        logging.info(_safe_str("Creating thumbnail for {}/{} with {} images".format(group_name, anim_name, len(valid_images))))
         
         # Create preview widget
         video_widget = AnimationPreviewWidget(self)
@@ -1748,7 +1776,7 @@ class AnimationDataUI(QtWidgets.QDialog):
         anim_data = {}
         if os.path.exists(anim_file):
             try:
-                with open(anim_file, "r") as f:
+                with _open_file(anim_file, "r") as f:
                     data = json.load(f)
                 anim_info = data.get("anim_info", {})
                 is_pose = data.get("is_pose", False)
@@ -1908,7 +1936,7 @@ class AnimationDataUI(QtWidgets.QDialog):
             _ns_save_path = os.path.join(anim_folder, "last_namespace_mapping.json")
             try:
                 if os.path.exists(_ns_save_path):
-                    with open(_ns_save_path, 'r') as _f:
+                    with _open_file(_ns_save_path, 'r') as _f:
                         _loaded_map = json.load(_f)
                         if isinstance(_loaded_map, dict):
                             namespace_mapping.update({str(k): str(v) for k, v in _loaded_map.items()})
@@ -2167,8 +2195,8 @@ class AnimationDataUI(QtWidgets.QDialog):
                     namespace_mapping.clear()
                     namespace_mapping.update(normalized)
                     try:
-                        with open(_ns_save_path, 'w') as _f:
-                            json.dump(namespace_mapping, _f, indent=2)
+                        with _open_file(_ns_save_path, 'w') as _f:
+                            json.dump(namespace_mapping, _f, indent=2, ensure_ascii=False)
                     except Exception:
                         pass
                     # Rebuild buffers with mapping applied and refresh preview immediately
@@ -2210,11 +2238,11 @@ class AnimationDataUI(QtWidgets.QDialog):
             anim_file = os.path.join(anim_folder, "animation_data.json")
 
             if not os.path.exists(anim_file):
-                self.status_label.setText("Error: Animation file not found at {}".format(anim_file))
-                cmds.warning("Animation file does not exist: {}".format(anim_file))
+                self.status_label.setText(_safe_str("Error: Animation file not found at {}".format(anim_file)))
+                cmds.warning(_safe_str("Animation file does not exist: {}".format(anim_file)))
                 return
 
-            with open(anim_file, "r") as f:
+            with _open_file(anim_file, "r") as f:
                 data = json.load(f)
 
             anim_data = data["animation_data"]
@@ -2548,7 +2576,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                 return
                 
             # Load existing animation data
-            with open(anim_file, "r") as f:
+            with _open_file(anim_file, "r") as f:
                 data = json.load(f)
                 
             is_pose = data.get("is_pose", False)
