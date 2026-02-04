@@ -1,50 +1,53 @@
 @echo off
-chcp 65001 >nul
 echo ========================================
-echo   GoSkinning ML Training - 快速开始
+echo   GoSkinning ML Training - Quick Start
 echo ========================================
 echo.
 
-REM 检查 Python
+REM Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [错误] 未找到 Python，请先安装 Python 3.8+
+    echo [ERROR] Python not found. Please install Python 3.8+
+    echo Download: https://www.python.org/downloads/
     pause
     exit /b 1
 )
 
-echo [1/5] 检查 Python... OK
+echo [1/5] Python OK
 echo.
 
-REM 安装依赖
-echo [2/5] 安装依赖...
-pip install torch numpy tensorboard tqdm -q
+REM Install dependencies
+echo [2/5] Installing dependencies...
+pip install torch numpy tensorboard tqdm
+if errorlevel 1 (
+    echo [ERROR] Failed to install dependencies
+    pause
+    exit /b 1
+)
 echo.
 
-REM 创建示例数据
-echo [3/5] 创建示例数据 (50个样本)...
+REM Create sample data
+echo [3/5] Creating sample data...
 python create_sample_data.py --output_dir ./sample_data --num_samples 50
+if errorlevel 1 (
+    echo [ERROR] Failed to create sample data
+    pause
+    exit /b 1
+)
 echo.
 
-REM 开始训练
-echo [4/5] 开始训练 (10个epoch 用于测试)...
+REM Train
+echo [4/5] Training (10 epochs for test)...
+python training/train.py --data_dir ./sample_data/train --val_dir ./sample_data/val --model_type general --epochs 10 --batch_size 4 --output_dir ./test_checkpoints
 echo.
-python training/train.py ^
-    --data_dir ./sample_data/train ^
-    --val_dir ./sample_data/val ^
-    --model_type general ^
-    --epochs 10 ^
-    --batch_size 4 ^
-    --output_dir ./test_checkpoints
 
+echo [5/5] Done!
 echo.
-echo [5/5] 训练完成!
+echo Model saved to: ./test_checkpoints/
 echo.
-echo 模型保存在: ./test_checkpoints/
-echo.
-echo 下一步:
-echo   1. 使用真实数据重新训练
-echo   2. 增加 epochs 到 100+
-echo   3. 导出模型用于 3ds Max
+echo Next steps:
+echo   1. Train with real data
+echo   2. Increase epochs to 100+
+echo   3. Export model for 3ds Max
 echo.
 pause
