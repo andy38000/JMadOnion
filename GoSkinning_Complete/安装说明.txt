@@ -1,0 +1,56 @@
+========================================
+   GoSkinning 自动蒙皮插件 - 安装说明
+========================================
+
+【安装步骤】
+
+1. 把整个 GoSkinning_Complete 文件夹复制到任意位置
+   例如: D:\GoSkinning_Complete
+
+2. 把你训练好的模型文件 (skinning_model_weights.pth) 
+   复制到: GoSkinning_Complete\GoSkinning\ml\models\ 文件夹
+
+3. 打开 3ds Max
+
+4. 按 F11 打开脚本监听器
+
+5. 输入以下命令 (修改路径为你的实际路径):
+
+   fileIn @"D:\GoSkinning_Complete\GoSkinning_Launcher.ms"
+
+6. 按回车，插件窗口弹出
+
+
+【激活命令示例】
+
+如果放在 D 盘:
+fileIn @"D:\GoSkinning_Complete\GoSkinning_Launcher.ms"
+
+如果放在桌面:
+fileIn @"C:\Users\Admin\Desktop\GoSkinning_Complete\GoSkinning_Launcher.ms"
+
+如果放在 3ds Max scripts 目录:
+fileIn @"C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022\ENU\scripts\GoSkinning_Complete\GoSkinning_Launcher.ms"
+
+
+【使用方法】
+
+1. 选择网格模型，点击【选定】添加
+2. 选择所有骨骼，点击【选定】添加  
+3. 在算法模型下拉框选择你的模型
+4. 点击【开始蒙皮】
+
+
+【文件结构】
+
+GoSkinning_Complete\
+├── GoSkinning_Launcher.ms    <- 启动器
+├── 安装说明.txt               <- 本文件
+└── GoSkinning\               <- 插件主目录
+    ├── ml\
+    │   └── models\           <- 把训练好的模型放这里
+    │       └── (你的模型.pth)
+    ├── core\
+    ├── ui\
+    └── ...
+
