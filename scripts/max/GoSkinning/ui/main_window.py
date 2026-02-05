@@ -316,6 +316,19 @@ class GlobalSkinningTab(QWidget):
         super().__init__(parent)
         self.setup_ui()
     
+    def _load_available_models(self):
+        """加载可用的ML模型到下拉框"""
+        try:
+            from ..core.ml_inference import get_inference
+            inference = get_inference()
+            models = inference.get_available_models()
+            self.combo_model.clear()
+            self.combo_model.addItems(models)
+        except Exception as e:
+            print(f"[UI] Failed to load models: {e}")
+            self.combo_model.clear()
+            self.combo_model.addItems(["general-v4.5", "general-v4.0", "local-v3"])
+    
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -324,7 +337,8 @@ class GlobalSkinningTab(QWidget):
         model_layout = QHBoxLayout()
         model_layout.addWidget(QLabel("算法模型"))
         self.combo_model = QComboBox()
-        self.combo_model.addItems(["general-v4.5", "general-v4.0", "general-v3.0"])
+        # 动态加载可用模型
+        self._load_available_models()
         model_layout.addWidget(self.combo_model)
         self.check_merge = QCheckBox("合并网格")
         self.check_merge.setChecked(True)
