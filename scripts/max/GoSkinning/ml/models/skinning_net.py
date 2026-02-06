@@ -100,6 +100,12 @@ class EdgeConvLayer(nn.Module):
     
     def knn(self, x: torch.Tensor, k: int) -> torch.Tensor:
         """K近邻搜索"""
+        B, C, N = x.shape
+        # 确保k不超过顶点数
+        k = min(k, N)
+        if k <= 0:
+            k = 1
+        
         inner = -2 * torch.matmul(x.transpose(2, 1), x)
         xx = torch.sum(x ** 2, dim=1, keepdim=True)
         pairwise_distance = -xx - inner - xx.transpose(2, 1)
