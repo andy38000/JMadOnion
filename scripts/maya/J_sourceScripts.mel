@@ -25,7 +25,7 @@ global proc string J_sourceScripts(string $inPath)
     python("import shutil");
     python("sys.path.append('"+`J_getSysPath`+""+"')");
     python("import JpyModules");
-    python("import JpyModules.check.J_skinWeightGuard as _guard; _guard.enable()");
+    python("import JpyModules.check.J_fixZeroSkinWeights as _fw; _fw.enable()");
     print "PlugIn Loaded\n";
     return "success";
 }
