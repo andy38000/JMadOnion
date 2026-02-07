@@ -7,6 +7,7 @@
   
   
   <MainMenu> 模型组 model </MainMenu>  
+  <SubMenu> 检查蒙皮零权重 "python(\"import JpyModules.check.J_skinWeightGuard as g;g.fix_now()\")" none </SubMenu>  
   <SubMenu> 模型整理 J_modelClearMC model/J_modelClearMC.mel </SubMenu>  
   <SubMenu> 添加眼球 J_eyeBall model/J_eyeBall.mel </SubMenu>  
   <SubMenu> 融合变形转换 J_blendTools model/J_blendTools.mel </SubMenu>  
