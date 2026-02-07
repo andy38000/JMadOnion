@@ -1,503 +1,395 @@
 # -*- coding: utf-8 -*-
 """
-J_fixZeroSkinWeights.py
-=======================
-Maya script to detect and fix vertices with zero skin weights before FBX export.
+J_fixZeroSkinWeights.py  --  v3 standalone
+==========================================
+Fix vertices with zero skin weights before FBX export to Unity.
 
-Problem:
-    Unity ImportFBX Warning:
-        "Mesh 'model_15001_face' has 238 (out of 3497) vertices with no weight
-         and bone assigned (they will be assigned to bone #0 with weight 1)."
+Unity error:
+    "Mesh 'model_15001_face' has 238 (out of 3497) vertices with no weight
+     and bone assigned (they will be assigned to bone #0 with weight 1)."
 
-    Vertices with no skin weights snap to the root bone during animation,
-    causing visible mesh deformation artifacts.
+HOW TO USE:
+    1. Open your Maya scene
+    2. Select the mesh(es) with the problem  (e.g. model_15001_face)
+    3. Open Script Editor -> Python tab
+    4. Paste this ENTIRE file and press Ctrl+Enter (or numpad Enter)
+    5. Check the output -- it should say "FIXED" for each vertex
+    6. Save the Maya scene, then re-export FBX
 
-Solution:
-    1. Detect all zero-weight vertices using Maya API 2.0 (fast batch query)
-    2. For each zero-weight vertex, find the nearest neighbor with valid weights
-    3. Copy the neighbor's skin weights using cmds.skinPercent (reliable)
-
-Usage in Maya Script Editor (Python):
-    ---------------------------------------------------------------
-    # Fix ALL skinned meshes in the scene (recommended before FBX export)
-    import JpyModules.check.J_fixZeroSkinWeights as fzw
-    fzw.fix_all()
-
-    # Fix only selected meshes
-    import JpyModules.check.J_fixZeroSkinWeights as fzw
-    fzw.fix_selected()
-
-    # Check only (report problems, don't fix)
-    import JpyModules.check.J_fixZeroSkinWeights as fzw
-    fzw.check_all()
-
-    # Highlight zero-weight vertices in viewport
-    import JpyModules.check.J_fixZeroSkinWeights as fzw
-    fzw.select_zero_weight_vertices()
-    ---------------------------------------------------------------
-
-    If you have cached a previous import, reload before running:
-        import importlib
-        import JpyModules.check.J_fixZeroSkinWeights as fzw
-        importlib.reload(fzw)
-        fzw.fix_all()
+    Alternatively, to fix ALL skinned meshes without selecting:
+       Just change the last line from  run_fix_selected()  to  run_fix_all()
 """
 
 import maya.cmds as cmds
-import maya.api.OpenMaya as om2
-import maya.api.OpenMayaAnim as oma2
+import math
 
 
-# ============================================================================
-#  Internal helpers
-# ============================================================================
-
-def _get_skin_cluster(mesh):
-    """Return the skinCluster node name attached to *mesh*, or None."""
-    # mel.eval findRelatedSkinCluster is the canonical way, but listHistory
-    # is simpler and works for most cases.
-    history = cmds.listHistory(mesh, pruneDagObjects=True) or []
-    clusters = cmds.ls(history, type="skinCluster") or []
-    return clusters[0] if clusters else None
-
-
-def _get_mesh_dag_path(mesh_name):
-    """Return an om2.MDagPath for the given mesh transform or shape."""
-    sel = om2.MSelectionList()
-    sel.add(mesh_name)
-    dag = sel.getDagPath(0)
-    if dag.apiType() == om2.MFn.kTransform:
-        dag.extendToShape()
-    return dag
+def get_skin_cluster(mesh):
+    """Find the skinCluster connected to a mesh."""
+    sc = None
+    # Method 1: mel findRelatedSkinCluster (most reliable)
+    try:
+        import maya.mel as mel
+        sc = mel.eval('findRelatedSkinCluster("{}")'.format(mesh))
+        if sc:
+            return sc
+    except Exception:
+        pass
+    # Method 2: listHistory fallback
+    hist = cmds.listHistory(mesh, pruneDagObjects=True) or []
+    clusters = cmds.ls(hist, type="skinCluster") or []
+    if clusters:
+        return clusters[0]
+    return None
 
 
-def _get_skin_fn(skin_cluster_name):
-    """Return an oma2.MFnSkinCluster for the named skinCluster."""
-    sel = om2.MSelectionList()
-    sel.add(skin_cluster_name)
-    obj = sel.getDependNode(0)
-    return oma2.MFnSkinCluster(obj)
-
-
-def _get_influence_names(skin_cluster):
-    """Return an ordered list of influence (joint) names for a skinCluster."""
-    return cmds.skinCluster(skin_cluster, query=True, influence=True) or []
-
-
-def _find_zero_weight_vertices(mesh, skin_cluster):
+def find_zero_weight_verts(mesh, skin_cluster):
     """
-    Return a list of vertex indices whose total skin weight sum is zero.
-
-    Uses Maya API 2.0 for fast batch weight query.
+    Find all vertex indices where the total skin weight is zero.
+    Uses cmds.skinPercent (pure cmds, no API dependency, max compatibility).
     """
-    dag = _get_mesh_dag_path(mesh)
-    skin_fn = _get_skin_fn(skin_cluster)
-
-    mesh_fn = om2.MFnMesh(dag)
-    num_verts = mesh_fn.numVertices
-
-    # Build a component containing ALL vertices
-    comp_fn = om2.MFnSingleIndexedComponent()
-    vert_comp = comp_fn.create(om2.MFn.kMeshVertComponent)
-    comp_fn.setCompleteData(num_verts)
-
-    # Batch query -- returns flat MDoubleArray, length = numVerts * numInfluences
-    weights, inf_count = skin_fn.getWeights(dag, vert_comp)
+    num_verts = cmds.polyEvaluate(mesh, vertex=True)
+    influences = cmds.skinCluster(skin_cluster, query=True, influence=True) or []
+    num_inf = len(influences)
+    print(u"  Scanning {} vertices, {} influences ...".format(num_verts, num_inf))
 
     zero_verts = []
     for vi in range(num_verts):
-        offset = vi * inf_count
-        total = 0.0
-        for ii in range(inf_count):
-            total += weights[offset + ii]
+        vtx = "{}.vtx[{}]".format(mesh, vi)
+        # Get all weights for this vertex
+        weights = cmds.skinPercent(skin_cluster, vtx, query=True, value=True) or []
+        total = sum(weights)
         if total < 1e-6:
             zero_verts.append(vi)
 
     return zero_verts
 
 
-def _get_all_weights_and_influences(mesh, skin_cluster):
+def find_zero_weight_verts_fast(mesh, skin_cluster):
     """
-    Return (weights_2d, inf_count) where weights_2d[vtx_index] is a list of
-    per-influence weights.
+    Fast version using Maya API 2.0.  Falls back to cmds version if API fails.
     """
-    dag = _get_mesh_dag_path(mesh)
-    skin_fn = _get_skin_fn(skin_cluster)
-    mesh_fn = om2.MFnMesh(dag)
-    num_verts = mesh_fn.numVertices
+    try:
+        import maya.api.OpenMaya as om2
+        import maya.api.OpenMayaAnim as oma2
 
-    comp_fn = om2.MFnSingleIndexedComponent()
-    vert_comp = comp_fn.create(om2.MFn.kMeshVertComponent)
-    comp_fn.setCompleteData(num_verts)
+        sel = om2.MSelectionList()
+        sel.add(mesh)
+        dag = sel.getDagPath(0)
+        if dag.apiType() == om2.MFn.kTransform:
+            dag.extendToShape()
 
-    flat_weights, inf_count = skin_fn.getWeights(dag, vert_comp)
+        sel2 = om2.MSelectionList()
+        sel2.add(skin_cluster)
+        skin_fn = oma2.MFnSkinCluster(sel2.getDependNode(0))
 
-    weights_2d = []
-    for vi in range(num_verts):
-        offset = vi * inf_count
-        w = [flat_weights[offset + j] for j in range(inf_count)]
-        weights_2d.append(w)
+        mesh_fn = om2.MFnMesh(dag)
+        num_verts = mesh_fn.numVertices
 
-    return weights_2d, inf_count
+        comp_fn = om2.MFnSingleIndexedComponent()
+        vert_comp = comp_fn.create(om2.MFn.kMeshVertComponent)
+        comp_fn.setCompleteData(num_verts)
+
+        weights, inf_count = skin_fn.getWeights(dag, vert_comp)
+
+        zero_verts = []
+        for vi in range(num_verts):
+            offset = vi * inf_count
+            total = 0.0
+            for ii in range(inf_count):
+                total += weights[offset + ii]
+            if total < 1e-6:
+                zero_verts.append(vi)
+
+        print(u"  [API] Scanned {} verts, {} influences -> {} zero-weight".format(
+            num_verts, inf_count, len(zero_verts)))
+        return zero_verts
+
+    except Exception as e:
+        print(u"  [API failed: {}] Falling back to cmds method ...".format(e))
+        return find_zero_weight_verts(mesh, skin_cluster)
 
 
-def _get_vertex_positions(mesh):
-    """Return list of (x,y,z) tuples in world space for all vertices."""
-    dag = _get_mesh_dag_path(mesh)
-    mesh_fn = om2.MFnMesh(dag)
-    points = mesh_fn.getPoints(om2.MSpace.kWorld)
-    return [(p.x, p.y, p.z) for p in points]
-
-
-def _find_nearest_valid_vertex(vi, positions, zero_set, num_verts):
+def fix_mesh(mesh, verbose=True):
     """
-    Find the nearest vertex to *vi* that is NOT in *zero_set*.
-    Returns (best_index, best_distance) or (-1, inf).
-    """
-    px, py, pz = positions[vi]
-    best_dist_sq = float("inf")
-    best_vi = -1
-    for oi in range(num_verts):
-        if oi == vi or oi in zero_set:
-            continue
-        ox, oy, oz = positions[oi]
-        dx = px - ox
-        dy = py - oy
-        dz = pz - oz
-        dsq = dx * dx + dy * dy + dz * dz
-        if dsq < best_dist_sq:
-            best_dist_sq = dsq
-            best_vi = oi
-    return best_vi, best_dist_sq ** 0.5
-
-
-def _unlock_all_influences(skin_cluster):
-    """
-    Unlock all influence weights on a skinCluster.
-    Locked influences prevent skinPercent from modifying weights.
-    Returns a list of (attr, old_lock_state) so we can restore later.
-    """
-    influences = _get_influence_names(skin_cluster)
-    locked_states = []
-    for i, inf in enumerate(influences):
-        attr = "{}.lockWeights".format(inf)
-        if cmds.objExists(attr):
-            old_val = cmds.getAttr(attr)
-            locked_states.append((attr, old_val))
-            if old_val:
-                cmds.setAttr(attr, False)
-    return locked_states
-
-
-def _restore_influence_locks(locked_states):
-    """Restore influence lock states saved by _unlock_all_influences."""
-    for attr, val in locked_states:
-        if cmds.objExists(attr):
-            cmds.setAttr(attr, val)
-
-
-# ============================================================================
-#  Core fix function -- uses cmds.skinPercent (reliable weight assignment)
-# ============================================================================
-
-def _fix_zero_weight_vertices(mesh, skin_cluster, zero_verts, verbose=True):
-    """
-    For each zero-weight vertex, copy weights from the nearest valid neighbor
-    using cmds.skinPercent.
-
+    Detect and fix all zero-weight vertices on a single mesh.
     Returns the number of vertices fixed.
     """
+    # --- 1. Find skinCluster ---
+    sc = get_skin_cluster(mesh)
+    if not sc:
+        print(u"  [SKIP] '{}' has no skinCluster".format(mesh))
+        return 0
+
+    print(u"\n>>> Processing: {}  (skinCluster: {})".format(mesh, sc))
+
+    # --- 2. Get influence list ---
+    influences = cmds.skinCluster(sc, query=True, influence=True) or []
+    if not influences:
+        cmds.warning(u"  No influences found on skinCluster '{}'".format(sc))
+        return 0
+
+    print(u"  Influences ({}): {} ...".format(
+        len(influences),
+        ", ".join(influences[:5]) + (" ..." if len(influences) > 5 else "")
+    ))
+
+    # --- 3. Find zero-weight vertices ---
+    zero_verts = find_zero_weight_verts_fast(mesh, sc)
+
     if not zero_verts:
+        print(u"  [OK] No zero-weight vertices found!")
         return 0
 
     num_verts = cmds.polyEvaluate(mesh, vertex=True)
-    positions = _get_vertex_positions(mesh)
-    influences = _get_influence_names(skin_cluster)
+    print(u"  [!] Found {} / {} zero-weight vertices".format(len(zero_verts), num_verts))
+    print(u"  Vertex IDs: {}{}".format(
+        zero_verts[:20],
+        " ..." if len(zero_verts) > 20 else ""
+    ))
 
-    # Get all weights via API (fast read)
-    weights_2d, inf_count = _get_all_weights_and_influences(mesh, skin_cluster)
+    # --- 4. Get ALL vertex positions (for nearest-neighbor search) ---
+    print(u"  Computing vertex positions ...")
+    positions = []
+    for vi in range(num_verts):
+        pos = cmds.xform("{}.vtx[{}]".format(mesh, vi),
+                         query=True, worldSpace=True, translation=True)
+        positions.append(pos)
 
     zero_set = set(zero_verts)
 
-    # Unlock all influences so skinPercent can write to them
-    saved_locks = _unlock_all_influences(skin_cluster)
+    # --- 5. Read donor weights for ALL valid (non-zero) vertices ---
+    #    We pre-read so we don't need to re-query for every zero vertex.
+    print(u"  Pre-reading valid vertex weights for nearest-neighbor lookup ...")
+    donor_cache = {}  # vi -> [(joint, weight), ...]
 
-    # Save and temporarily disable weight normalization
-    # 1 = Interactive (normalize on edit), 0 = None, 2 = Post
-    old_normalize = cmds.skinCluster(skin_cluster, query=True, normalizeWeights=True)
-    cmds.skinCluster(skin_cluster, edit=True, normalizeWeights=1)
+    # Only cache vertices that are close to zero-weight vertices
+    # (optimization: skip far-away vertices)
+    # But for safety, we read all non-zero vertex weights
+    # This is done lazily below per zero-vertex's nearest neighbor.
 
+    # --- 6. Unlock influences ---
+    locked_infs = []
+    for inf in influences:
+        attr = "{}.lockWeights".format(inf)
+        if cmds.objExists(attr):
+            old = cmds.getAttr(attr)
+            if old:
+                locked_infs.append((attr, old))
+                cmds.setAttr(attr, False)
+
+    if locked_infs:
+        print(u"  Unlocked {} locked influence(s)".format(len(locked_infs)))
+
+    # --- 7. Save normalization mode ---
+    old_nrm = cmds.skinCluster(sc, query=True, normalizeWeights=True)
+    # Set to "Interactive" so that weights are normalized after assignment
+    cmds.skinCluster(sc, edit=True, normalizeWeights=1)
+
+    # --- 8. Fix each zero-weight vertex ---
+    print(u"  Fixing vertices ...")
     fixed = 0
 
     for idx, vi in enumerate(zero_verts):
-        # Progress feedback for large batches
-        if verbose and idx % 50 == 0 and idx > 0:
-            print(u"  ... processed {}/{} vertices".format(idx, len(zero_verts)))
+        if (idx + 1) % 50 == 0 or idx == 0:
+            print(u"    ... {}/{}".format(idx + 1, len(zero_verts)))
 
-        # Find nearest valid neighbor
-        best_vi, best_dist = _find_nearest_valid_vertex(
-            vi, positions, zero_set, num_verts
-        )
+        px, py, pz = positions[vi]
 
-        if best_vi < 0:
-            # ALL vertices zero-weight -- fallback to root influence
-            if verbose:
-                cmds.warning(
-                    u"  vtx[{}]: no valid neighbor, assigning to root "
-                    u"influence '{}'".format(vi, influences[0])
-                )
-            vtx_name = "{}.vtx[{}]".format(mesh, vi)
-            cmds.skinPercent(
-                skin_cluster, vtx_name,
-                transformValue=[(influences[0], 1.0)]
-            )
-            fixed += 1
-            continue
+        # Find nearest non-zero vertex
+        best_vi = -1
+        best_dist = float("inf")
+        for oi in range(num_verts):
+            if oi in zero_set:
+                continue
+            ox, oy, oz = positions[oi]
+            dx = px - ox
+            dy = py - oy
+            dz = pz - oz
+            d = dx * dx + dy * dy + dz * dz  # squared distance (faster)
+            if d < best_dist:
+                best_dist = d
+                best_vi = oi
 
-        # Build transformValue pairs from the donor vertex weights
-        donor_w = weights_2d[best_vi]
-        tv_pairs = []
-        for j in range(inf_count):
-            if donor_w[j] > 1e-8:
-                tv_pairs.append((influences[j], donor_w[j]))
+        best_dist = math.sqrt(best_dist) if best_dist < float("inf") else float("inf")
 
-        if not tv_pairs:
-            # Shouldn't happen since best_vi is not in zero_set, but just in case
+        # Read the donor's weights (with caching)
+        if best_vi >= 0:
+            if best_vi not in donor_cache:
+                donor_vtx = "{}.vtx[{}]".format(mesh, best_vi)
+                w_vals = cmds.skinPercent(sc, donor_vtx, query=True, value=True) or []
+                pairs = []
+                for ji, w in enumerate(w_vals):
+                    if w > 1e-8:
+                        pairs.append((influences[ji], w))
+                donor_cache[best_vi] = pairs
+            tv_pairs = donor_cache[best_vi]
+        else:
+            # All vertices zero -- fallback to first influence
             tv_pairs = [(influences[0], 1.0)]
 
-        vtx_name = "{}.vtx[{}]".format(mesh, vi)
-        cmds.skinPercent(
-            skin_cluster, vtx_name,
-            transformValue=tv_pairs
-        )
+        if not tv_pairs:
+            tv_pairs = [(influences[0], 1.0)]
 
-        if verbose and len(zero_verts) <= 30:
-            joint_str = ", ".join(
-                "{}={:.3f}".format(j, w) for j, w in tv_pairs[:3]
-            )
-            if len(tv_pairs) > 3:
-                joint_str += " ..."
-            print(u"  vtx[{}] <- vtx[{}] (dist={:.4f}) [{}]".format(
-                vi, best_vi, best_dist, joint_str
-            ))
+        # Apply the weights
+        vtx_name = "{}.vtx[{}]".format(mesh, vi)
+        try:
+            cmds.skinPercent(sc, vtx_name, transformValue=tv_pairs)
+        except Exception as e:
+            cmds.warning(u"  Failed to set weights on {}: {}".format(vtx_name, e))
+            # Try one joint at a time as fallback
+            try:
+                cmds.skinPercent(sc, vtx_name,
+                                 transformValue=[(tv_pairs[0][0], 1.0)])
+            except Exception as e2:
+                cmds.warning(u"  Fallback also failed: {}".format(e2))
+                continue
 
         fixed += 1
 
-    # Restore normalization and influence locks
-    cmds.skinCluster(skin_cluster, edit=True, normalizeWeights=old_normalize)
-    _restore_influence_locks(saved_locks)
+        if verbose and len(zero_verts) <= 30:
+            jstr = ", ".join("{}={:.3f}".format(j, w) for j, w in tv_pairs[:3])
+            if len(tv_pairs) > 3:
+                jstr += " ..."
+            print(u"    vtx[{}] <- vtx[{}] dist={:.4f}  [{}]".format(
+                vi, best_vi, best_dist, jstr))
 
+    # --- 9. Restore normalization and locks ---
+    cmds.skinCluster(sc, edit=True, normalizeWeights=old_nrm)
+    for attr, val in locked_infs:
+        if cmds.objExists(attr):
+            cmds.setAttr(attr, val)
+
+    # --- 10. VERIFY ---
+    print(u"\n  Verifying fix ...")
+    remaining = find_zero_weight_verts_fast(mesh, sc)
+    if remaining:
+        cmds.warning(
+            u"  [!!] '{}' STILL has {} zero-weight verts after fix: {}".format(
+                mesh, len(remaining), remaining[:20]))
+        # Second attempt: force assign remaining to nearest influence
+        print(u"  Attempting forced fallback for remaining vertices ...")
+        for rvi in remaining:
+            vtx_name = "{}.vtx[{}]".format(mesh, rvi)
+            # Find the closest influence joint by distance
+            vpos = cmds.xform(vtx_name, q=True, ws=True, t=True)
+            best_jnt = influences[0]
+            best_jd = float("inf")
+            for jnt in influences:
+                jpos = cmds.xform(jnt, q=True, ws=True, t=True)
+                dd = sum((a - b) ** 2 for a, b in zip(vpos, jpos))
+                if dd < best_jd:
+                    best_jd = dd
+                    best_jnt = jnt
+            try:
+                cmds.skinPercent(sc, vtx_name,
+                                 transformValue=[(best_jnt, 1.0)])
+                print(u"    vtx[{}] -> {} (nearest joint)".format(rvi, best_jnt))
+            except Exception as e:
+                cmds.warning(u"    vtx[{}] FAILED: {}".format(rvi, e))
+
+        # Final verification
+        remaining2 = find_zero_weight_verts_fast(mesh, sc)
+        if remaining2:
+            cmds.warning(
+                u"  [FAIL] '{}' STILL has {} zero-weight verts!".format(
+                    mesh, len(remaining2)))
+        else:
+            print(u"  [OK] All remaining vertices fixed on second pass!")
+            fixed = len(zero_verts)
+    else:
+        print(u"  [OK] Verification passed -- 0 zero-weight vertices remain!")
+
+    print(u"  Fixed {} / {} vertices on '{}'".format(fixed, len(zero_verts), mesh))
     return fixed
 
 
 # ============================================================================
-#  Public API -- check / fix / select
+#  Entry points
 # ============================================================================
 
-def check_meshes(meshes, verbose=True):
-    """
-    Check meshes for zero-weight vertices. Returns {mesh: [vertex_indices]}.
-    """
-    result = {}
-    for mesh in meshes:
-        sc = _get_skin_cluster(mesh)
-        if sc is None:
-            if verbose:
-                print(u"[Skip] '{}' -- no skinCluster".format(mesh))
-            continue
-        zero = _find_zero_weight_vertices(mesh, sc)
-        if zero:
-            result[mesh] = zero
-            if verbose:
-                nv = cmds.polyEvaluate(mesh, vertex=True)
-                ids_preview = str(zero[:15])
-                if len(zero) > 15:
-                    ids_preview = ids_preview[:-1] + ", ...]"
-                cmds.warning(
-                    u"[WARN] '{}': {} / {} vertices with ZERO weight. IDs: {}".format(
-                        mesh, len(zero), nv, ids_preview
-                    )
-                )
-        else:
-            if verbose:
-                print(u"[OK]   '{}' -- all vertices have valid weights".format(mesh))
-    return result
+def run_fix_selected():
+    """Fix zero-weight verts on the currently selected mesh(es)."""
+    sel = cmds.ls(selection=True, long=True) or []
+    if not sel:
+        cmds.warning(u"Please select one or more skinned meshes first!")
+        return
 
+    meshes = []
+    for s in sel:
+        shapes = cmds.listRelatives(s, shapes=True, type="mesh", fullPath=True) or []
+        if shapes:
+            meshes.append(s)
+        elif cmds.nodeType(s) == "mesh":
+            p = cmds.listRelatives(s, parent=True, fullPath=True)
+            if p:
+                meshes.append(p[0])
+    meshes = list(set(meshes))
 
-def fix_meshes(meshes, verbose=True):
-    """
-    Fix zero-weight vertices on given meshes. Returns {mesh: num_fixed}.
-    Wraps the operation in an undo chunk so it can be reverted with Ctrl+Z.
-    """
-    total_fixed = {}
+    if not meshes:
+        cmds.warning(u"No mesh found in selection!")
+        return
 
-    # Open a single undo chunk for the whole operation
     cmds.undoInfo(openChunk=True, chunkName="fixZeroSkinWeights")
-
     try:
-        for mesh in meshes:
-            sc = _get_skin_cluster(mesh)
-            if sc is None:
-                if verbose:
-                    print(u"[Skip] '{}' -- no skinCluster".format(mesh))
-                continue
+        print(u"\n" + u"=" * 60)
+        print(u"  Fix Zero Skin Weights  (selected: {})".format(len(meshes)))
+        print(u"=" * 60)
 
-            zero = _find_zero_weight_vertices(mesh, sc)
-            if not zero:
-                if verbose:
-                    print(u"[OK]   '{}' -- no zero-weight vertices".format(mesh))
-                continue
+        total = 0
+        for m in meshes:
+            total += fix_mesh(m)
 
-            nv = cmds.polyEvaluate(mesh, vertex=True)
-            if verbose:
-                cmds.warning(
-                    u"[FIX]  '{}': fixing {} / {} zero-weight vertices ...".format(
-                        mesh, len(zero), nv
-                    )
-                )
-
-            count = _fix_zero_weight_vertices(mesh, sc, zero, verbose=verbose)
-            total_fixed[mesh] = count
-
-            # ---- Verify the fix ----
-            remaining = _find_zero_weight_vertices(mesh, sc)
-            if remaining:
-                cmds.warning(
-                    u"[WARN] '{}': {} vertices STILL zero after fix!".format(
-                        mesh, len(remaining)
-                    )
-                )
-            else:
-                if verbose:
-                    print(u"[DONE] '{}': all {} vertices fixed OK".format(
-                        mesh, count
-                    ))
-
+        print(u"\n" + u"=" * 60)
+        if total > 0:
+            print(u"  DONE -- Fixed {} vertex(es) total".format(total))
+            print(u"  Please SAVE the scene, then re-export FBX.")
+        else:
+            print(u"  No zero-weight vertices found. Nothing to fix.")
+        print(u"  (Ctrl+Z to undo)")
+        print(u"=" * 60 + u"\n")
     finally:
         cmds.undoInfo(closeChunk=True)
 
-    return total_fixed
 
-
-# ============================================================================
-#  Mesh discovery helpers
-# ============================================================================
-
-def _all_skinned_meshes():
-    """Return transforms of all meshes in the scene that have a skinCluster."""
+def run_fix_all():
+    """Fix zero-weight verts on ALL skinned meshes in the scene."""
     mesh_shapes = cmds.ls(type="mesh", long=True) or []
     if not mesh_shapes:
-        return []
+        cmds.warning(u"No meshes in scene!")
+        return
     transforms = list(set(
         cmds.listRelatives(mesh_shapes, parent=True, fullPath=True) or []
     ))
-    result = [t for t in transforms if _get_skin_cluster(t) is not None]
-    return sorted(result)
+    meshes = [t for t in transforms if get_skin_cluster(t) is not None]
 
-
-def _selected_meshes():
-    """Return mesh transforms from the current selection."""
-    sel = cmds.ls(selection=True, long=True) or []
-    result = []
-    for s in sel:
-        shapes = cmds.listRelatives(
-            s, shapes=True, type="mesh", fullPath=True
-        ) or []
-        if shapes:
-            result.append(s)
-        elif cmds.nodeType(s) == "mesh":
-            parent = cmds.listRelatives(s, parent=True, fullPath=True)
-            if parent:
-                result.append(parent[0])
-    return list(set(result))
-
-
-# ============================================================================
-#  Convenience entry points
-# ============================================================================
-
-def check_all():
-    """Check every skinned mesh in the scene for zero-weight vertices."""
-    meshes = _all_skinned_meshes()
     if not meshes:
-        cmds.warning(u"No skinned meshes found in scene.")
-        return {}
-    print(u"=" * 60)
-    print(u"Checking {} skinned mesh(es) ...".format(len(meshes)))
-    print(u"=" * 60)
-    return check_meshes(meshes)
-
-
-def check_selected():
-    """Check selected meshes for zero-weight vertices."""
-    meshes = _selected_meshes()
-    if not meshes:
-        cmds.warning(u"Please select one or more skinned meshes.")
-        return {}
-    return check_meshes(meshes)
-
-
-def fix_all():
-    """Fix zero-weight vertices on ALL skinned meshes in the scene."""
-    meshes = _all_skinned_meshes()
-    if not meshes:
-        cmds.warning(u"No skinned meshes found in scene.")
-        return {}
-    print(u"=" * 60)
-    print(u"Fixing zero-weight verts on {} skinned mesh(es) ...".format(len(meshes)))
-    print(u"=" * 60)
-    result = fix_meshes(meshes)
-    total = sum(result.values())
-    print(u"=" * 60)
-    print(u"TOTAL FIXED: {} vertices across {} mesh(es)".format(total, len(result)))
-    print(u"You can now safely export FBX. (Ctrl+Z to undo)")
-    print(u"=" * 60)
-    return result
-
-
-def fix_selected():
-    """Fix zero-weight vertices on selected meshes only."""
-    meshes = _selected_meshes()
-    if not meshes:
-        cmds.warning(u"Please select one or more skinned meshes.")
-        return {}
-    result = fix_meshes(meshes)
-    total = sum(result.values())
-    print(u"=" * 60)
-    print(u"TOTAL FIXED: {} vertices across {} mesh(es)".format(total, len(result)))
-    print(u"You can now safely export FBX. (Ctrl+Z to undo)")
-    print(u"=" * 60)
-    return result
-
-
-def select_zero_weight_vertices():
-    """
-    Select (highlight) all zero-weight vertices on the current selection
-    so you can visually inspect them in the viewport.
-    """
-    meshes = _selected_meshes()
-    if not meshes:
-        cmds.warning(u"Please select one or more skinned meshes.")
+        cmds.warning(u"No skinned meshes in scene!")
         return
 
-    to_select = []
-    for mesh in meshes:
-        sc = _get_skin_cluster(mesh)
-        if sc is None:
-            continue
-        zero = _find_zero_weight_vertices(mesh, sc)
-        for vi in zero:
-            to_select.append("{}.vtx[{}]".format(mesh, vi))
+    cmds.undoInfo(openChunk=True, chunkName="fixZeroSkinWeights")
+    try:
+        print(u"\n" + u"=" * 60)
+        print(u"  Fix Zero Skin Weights  (all: {})".format(len(meshes)))
+        print(u"=" * 60)
 
-    if to_select:
-        cmds.select(to_select, replace=True)
-        cmds.warning(u"Selected {} zero-weight vertex(es).".format(len(to_select)))
-    else:
-        cmds.warning(u"No zero-weight vertices found.")
+        total = 0
+        for m in sorted(meshes):
+            total += fix_mesh(m)
+
+        print(u"\n" + u"=" * 60)
+        if total > 0:
+            print(u"  DONE -- Fixed {} vertex(es) total".format(total))
+            print(u"  Please SAVE the scene, then re-export FBX.")
+        else:
+            print(u"  No zero-weight vertices found. Nothing to fix.")
+        print(u"  (Ctrl+Z to undo)")
+        print(u"=" * 60 + u"\n")
+    finally:
+        cmds.undoInfo(closeChunk=True)
 
 
 # ============================================================================
-#  Run directly (paste entire file into Script Editor for quick use)
+#  AUTO-RUN: Select your mesh, then execute this script
 # ============================================================================
-if __name__ == "__main__":
-    fix_all()
+run_fix_selected()
