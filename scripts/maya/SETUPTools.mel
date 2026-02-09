@@ -1,0 +1,358 @@
+// ============================================================
+//  JN_Rig工具架  v3.1  —— 简化版
+//  更新日期：2023.07.27
+//  作者：初六
+// ============================================================
+
+// --------------- 基础路径 ---------------
+global string $address;
+$address = "Z:/rig/A/RigTools/";
+
+// --------------- 辅助函数：生成 source 命令字符串 ---------------
+//  用法：srcCmd("子路径/文件.mel")  →  返回  source "Z:/rig/A/RigTools/子路径/文件.mel"
+global proc string srcCmd(string $relPath)
+{
+    global string $address;
+    return ("source \"" + $address + $relPath + "\"");
+}
+
+// ======================== 构建菜单 ========================
+{
+    // --- 快捷变量：常用子目录 ---
+    string $body   = "RDF_body_plugin/";
+    string $face   = "006-riging/";
+    string $model  = "000-模型工具/";
+    string $anim   = "007-动作工具/";
+    string $check  = "检查工具/";
+    string $custom = "013-私人订制/";
+    string $clean  = "001-文件清理/";
+    string $create = "002-设置创建/";
+    string $bone   = "003-骨骼链对位/";
+    string $edit   = "004-修改编辑/";
+    string $deform = "005-变形权重/";
+    string $mocap  = "009-动捕转换/";
+
+    // ===================== 绑定插件 =====================
+    string $of3d_RDF_bodyRig        = srcCmd($body  + "sdd_bodyRigging/install.mel");
+    string $of3d_RDF_mocapRig       = srcCmd($body  + "of3d_RDF_mocapRig/install.mel");
+    string $of3d_RDF_faceRig        = srcCmd($face  + "faceRig/install.mel");
+    string $of3d_RDF_faicalRig      = srcCmd($face  + "sdd_realisticFacialRig/install.mel");
+    string $of3d_RDF_faicalRig_shape= srcCmd($face  + "sdd_realisticFacialRig_shape/install.mel");
+    string $chineseADV              = srcCmd($face  + "chineseADV/install.mel");
+    string $englishADV              = srcCmd($face  + "englishADV/advancedskeleton5/install.mel");
+    string $fixshapetools           = srcCmd($face  + "BSEditTools.mel");
+    string $faicalRig_ctrlLink      = srcCmd($face  + "controllerLinkTool.mel");
+    string $faicalRig_splitWeight   = srcCmd($face  + "splittingWeightTool.mel");
+    string $checkset                = srcCmd($face  + "checkset.mel");
+
+    // ===================== 模型工具 =====================
+    string $pinckface       = srcCmd($model + "PinckFace/install.mel");
+    string $Mackface        = srcCmd($model + "MackFace/install.mel");
+    string $replaceshape    = srcCmd($model + "replaceShape.mel");
+    string $ReplaceSkin     = srcCmd($model + "RiggingReplaceTools.mel");
+    string $ReplaceEquip    = srcCmd($model + "Replace_Equip.mel");
+    string $CopySeamWeight  = srcCmd($model + "CopySeamWeight.mel");
+    string $setFacePoint    = srcCmd($model + "Face_hair_split/script/SetFacePoint.mel");
+    string $SkinCleanTools  = srcCmd($model + "SkinCleanTools.mel");
+    string $SkinFixMod      = srcCmd($model + "SkinFixMod.mel");
+    string $setNeckPoint    = srcCmd($model + "Neck_Head_Split/script/SetNeckPoint.mel");
+    string $weighePoseCheck = srcCmd($check + "WeightPoseCheckTool.mel");
+
+    // ===================== 动作工具 =====================
+    string $export_fbx_anim         = srcCmd($anim + "export_fbx_anim.mel");
+    string $export_nor_anim         = srcCmd($anim + "exportVtxNormalAnim.mel");
+    string $replaceRefPath          = srcCmd($anim + "Batch_replaceReferencePath.mel");
+    string $Export_SDK_Tools        = srcCmd($anim + "Export_SDK_Tools.mel");
+    string $connect_bs              = srcCmd("sdd_riggingTools_new/face_panel_conner/scripts/connect_bs.mel");
+    string $import_animData         = srcCmd($anim + "import_animData.mel");
+    string $Character_Seperate      = srcCmd($anim + "Character_Seperate.mel");
+    string $normalizeEulerAnimation = srcCmd($anim + "normalizeEuler.mel");
+    string $weaponPointTool         = srcCmd($anim + "weaponPointTool.mel");
+    string $add_HK_ctrl_HandWrold   = srcCmd($anim + "add_HK_ctrl_HandAddCtrl.mel");
+    string $add_HK_ctrl_HandObject  = srcCmd($anim + "add_HK_ctrl_HandLocalOrient.mel");
+    string $add_N05_ctrl            = srcCmd($anim + "add_N05_ctrl.mel");
+    string $add_N20_ctrl            = srcCmd($anim + "add_N20_ctrl.mel");
+    string $mocapDataToCtrl         = srcCmd($anim + "mocapDataToCtrl.mel");
+    string $J2_Props_Switch         = srcCmd($anim + "J2_Props_Switch.mel");
+    string $onionSkinRenderer       = srcCmd($anim + "onionSkinRenderer.mel");
+
+    // ===================== 检查工具 =====================
+    string $check_Win        = srcCmd($check + "check_Win.mel");
+    string $J5_RigCheckTools = srcCmd($check + "J5_RigCheckTools.mel");
+
+    // ===================== 私人订制 =====================
+    string $queryTool  = srcCmd($custom + "queryTool.mel");
+    string $saveobj    = srcCmd($custom + "saveobj.mel");
+    string $SkinWeight = srcCmd($custom + "SkinWeight.mel");
+    string $IKArm      = srcCmd($custom + "IKArm.mel");
+    string $attcon     = srcCmd($custom + "kmconattrtool.mel");
+    string $bs_poss    = srcCmd($custom + "bs_poss.mel");
+    string $km_bsc     = srcCmd($custom + "km_BSC.mel");
+
+    // ===================== 文件清理 =====================
+    string $zz01                    = srcCmd($clean + "zz01.mel");
+    string $mod_clean               = srcCmd($clean + "mod_clean.mel");
+    string $rig_clean               = srcCmd($clean + "rig_clean.mel");
+    string $TSMclear                = srcCmd($clean + "TSMMenuEditor.mel");
+    string $remove_nameSpace        = srcCmd($clean + "removeNameSpace.mel");
+    string $charmap_lockjoint       = srcCmd($clean + "Charmap_joint_lock.mel");
+    string $add_initialpostitionAttr= srcCmd($clean + "add_initialpostitionAttr.mel");
+
+    // ===================== 设置创建 =====================
+    string $addfollicle             = srcCmd($create + "addfollicle.mel");
+    string $create_tail_rig         = srcCmd($create + "create_tail_rig.mel");
+    string $add_ctrl_tools          = srcCmd($create + "add_ctrl_tools.mel");
+    string $key_to_set              = srcCmd($create + "key_to_setkey.mel");
+    string $controlSet              = srcCmd($create + "controlSet.mel");
+    string $controlMaker            = srcCmd($create + "controlMaker.mel");
+    string $km_control              = srcCmd($create + "YY_Film.mel");
+    string $hairSYS                 = srcCmd($create + "yzl_hairSyS01.mel");
+    string $createObj               = srcCmd($create + "Createobj.mel");
+    string $polyAddHair             = srcCmd($create + "YY_HUV.mel");
+    string $faceLink                = srcCmd($create + "YY_face_link.mel");
+    string $addLocator              = srcCmd($create + "Add_locator.mel");
+    string $skinWeightConstrainTool = srcCmd($create + "skinWeightConstrainTool.mel");
+    string $addExpression           = srcCmd($create + "addExpression.mel");
+    string $KM_Ctrl_Line_Create_Film= srcCmd($create + "KM_Ctrl_Line_Create_Film.mel");
+
+    // ===================== 骨骼链对位 =====================
+    string $pcx_MB     = srcCmd($bone + "动捕MotionBuilder/MocapCharacter_jnt_6.0_reference.mel");
+    string $pcx_muscle = srcCmd($bone + "关节肌肉系统/jirouguge_jnt_4.0.mel");
+    string $pcx_tx     = srcCmd($bone + "特效群组/qunjiguge_jnt_1.0_scaleconstrain.mel");
+
+    // ===================== 修改编辑 =====================
+    string $Riging_tool      = srcCmd("sdd_riggingTools_new/install.mel");
+    string $face_axial       = srcCmd($edit + "face_axial.mel");
+    string $un_lock          = srcCmd($edit + "un_lock.mel");
+    string $Attr_link        = srcCmd($edit + "Attr_Link.mel");
+    string $jointScale       = srcCmd($edit + "jointScale.mel");
+    string $rebuildblend     = srcCmd($edit + "rebuildBlendShape.mel");
+    string $orientHierarchy  = srcCmd($edit + "orientHierarchy.mel");
+    string $pivot_lock       = srcCmd($edit + "pivot_lock.mel");
+    string $shaveScale       = srcCmd($edit + "shaveScale.mel");
+    string $on_off           = srcCmd($edit + "setAttr_tool.mel");
+    string $atter_updown     = srcCmd($edit + "ly_change_attribute_order.mel");
+    string $dx11_fxo         = srcCmd($edit + "MayaShaderCreate.mel");
+
+    // ===================== 变形权重 =====================
+    string $cluster_copy         = srcCmd($deform + "copyallClusterWeights");
+    string $cluster_mirror       = srcCmd($deform + "sl_mirroCluster.mel");
+    string $pointToPoint         = srcCmd($deform + "CopyWeights.mel");
+    string $muscleWeightTransfer = srcCmd($deform + "");
+    string $wireWeight           = srcCmd($deform + "");
+    string $MirrorBS             = srcCmd($deform + "ntMBS.mel");
+    string $copyWeights          = srcCmd($deform + "copyWeights.mel");
+    string $copyWeights_of3d     = srcCmd($deform + "IO_Weight_OF3D.mel");
+
+    // ===================== 动捕转换 =====================
+    string $faceCatch      = srcCmd($mocap + "faceCatch.mel");
+    string $listFrameRange = srcCmd($mocap + "listFrameRange.mel");
+
+    // ===================== 刷新 =====================
+    string $refresh = srcCmd("/SETUPTools.mel");
+
+    // ======================== 创建菜单 ========================
+    if (`menu -q -ex setupTools`) deleteUI setupTools;
+
+    global string $gMainWindow;
+    setParent $gMainWindow;
+    menu -l "JN_Rig工具架" -to 1 setupTools;
+
+    // ---------- 模型工具 ----------
+    menuItem -to 1 -l "模型工具   " -sm 1;
+        menuItem -to 1 -l "特征捏脸工具  "         -c $pinckface;
+        menuItem -to 1 -l "特征捏脸工具2.0  "      -c $Mackface;
+        menuItem -to 1 -l "BlendShape替换工具  "    -c $replaceshape;
+        menuItem -to 1 -l "模型绑定替换工具  "      -c $ReplaceSkin;
+        menuItem -to 1 -l "装互换工具  "            -c $ReplaceEquip;
+        menuItem -to 1 -l "蒙皮模型修改  "          -c $SkinFixMod;
+        menuItem -to 1 -l "模型接缝传权重  "        -c $CopySeamWeight;
+        menuItem -to 1 -l "权重优化清理工具  "      -c $SkinCleanTools;
+        menuItem -to 1 -l "权重Pose核审工具  "      -c $weighePoseCheck;
+        menuItem -to 1 -l "设置面部模型点位置  "    -c $setFacePoint;
+        menuItem -to 1 -l "设置脖子模型点位置  "    -c $setNeckPoint;
+        menuItem -d 1;
+    setParent -menu ..;
+    menuItem -d 1;
+
+    // ---------- 动作工具 ----------
+    menuItem -to 1 -l "动作工具   " -sm 1;
+        menuItem -to 1 -l "批量导出FBX动作工具  "   -c $export_fbx_anim;
+        menuItem -to 1 -l "顶点法线动画导出工具  "  -c $export_nor_anim;
+        menuItem -to 1 -l "批量替换引用文件工具  "   -c $replaceRefPath;
+        menuItem -to 1 -l "驱动数据导出工具  "      -c $Export_SDK_Tools;
+        menuItem -to 1 -l "表情控制器一键连接  "    -c $connect_bs;
+        menuItem -to 1 -l "表情数据一键导入  "      -c $import_animData;
+        menuItem -to 1 -l "V项目角色拆分  "         -c $Character_Seperate;
+        menuItem -to 1 -l "欧拉旋转动画均一化  "    -c $normalizeEulerAnimation;
+        menuItem -to 1 -l "武器挂点工具  "          -c $weaponPointTool;
+        menuItem -to 1 -l "J1通用骨骼加ADV控制器   " -sm 1;
+            menuItem -to 1 -l "手部世界轴向（老版）  " -c $add_HK_ctrl_HandWrold;
+            menuItem -to 1 -l "手部局部轴向  "        -c $add_HK_ctrl_HandObject;
+        setParent -menu ..;
+        menuItem -to 1 -l "J1_N05/B15系列骨骼加ADV控制器  " -c $add_N05_ctrl;
+        menuItem -to 1 -l "N20_Lydia骨骼加ADV控制器  "      -c $add_N20_ctrl;
+        menuItem -to 1 -l "动捕数据导入控制器  "    -c $mocapDataToCtrl;
+        menuItem -to 1 -l "J2_Props_Switch  "       -c $J2_Props_Switch;
+        menuItem -to 1 -l "影子动画  "              -c $onionSkinRenderer;
+        menuItem -d 1;
+    setParent -menu ..;
+    menuItem -d 1;
+
+    // ---------- 绑定工具 ----------
+    menuItem -to 1 -l "绑定工具   " -sm 1;
+        menuItem -to 1 -l "身体绑定系统   " -sm 1;
+            menuItem -to 1 -l "新版（加强控制功能）  " -c $of3d_RDF_bodyRig;
+            menuItem -to 1 -l "老版（普通控制功能）  " -c $of3d_RDF_mocapRig;
+            menuItem -to 1 -l "中文版ADV  "           -c $chineseADV;
+            menuItem -to 1 -l "英文版ADV  "           -c $englishADV;
+            menuItem -d 1;
+        setParent -menu ..;
+        menuItem -to 1 -l "脸部绑定系统   " -sm 1;
+            menuItem -to 1 -l "blendshape加强版（facial系统）   " -c $of3d_RDF_faicalRig_shape;
+            menuItem -to 1 -l "joint加强版（facial系统）   "      -c $of3d_RDF_faicalRig;
+            menuItem -to 1 -l "控制器关联（facial系统）   "       -c $faicalRig_ctrlLink;
+            menuItem -to 1 -l "次级权重拆分   "                  -c $faicalRig_splitWeight;
+            menuItem -d 1;
+            menuItem -to 1 -l "卡通版（通用控制）   "            -c $of3d_RDF_faceRig;
+            menuItem -d 1;
+        setParent -menu ..;
+        menuItem -to 1 -l "检查工具   "          -c $check_Win;
+        menuItem -to 1 -l "修型工具   "          -c $fixshapetools;
+        menuItem -to 1 -l "J1规范化设置工具   "  -c $checkset;
+        menuItem -to 1 -l "J5规范化设置工具v1.0   " -c $J5_RigCheckTools;
+        menuItem -d 1;
+    setParent -menu ..;
+    menuItem -d 1;
+
+    // ---------- 私人订制 ----------
+    menuItem -to 1 -l "私人订制   " -sm 1;
+        menuItem -l "骨骼BS查询工具"       -c $queryTool;
+        menuItem -l "文件保存命名递增"     -c $saveobj;
+        menuItem -d 1;
+        menuItem -l "模型替换权重拷贝"     -c $SkinWeight;
+        menuItem -d 1;
+        menuItem -l "头部属性添加关联"     -c $attcon;
+        menuItem -d 1;
+        menuItem -l "adv_手部IK校轴"       -c $IKArm;
+        menuItem -d 1;
+        menuItem -l "poss穿插处理_bs"      -c $bs_poss;
+        menuItem -d 1;
+        menuItem -l "km_BSC"               -c $km_bsc;
+    setParent -menu ..;
+
+    // ---------- 文件清理 ----------
+    menuItem -to 1 -l "文件清理  " -sm 1;
+        menuItem -l "模型清理...   "                          -c $mod_clean;
+        menuItem -l "设置清理...   "                          -c $rig_clean;
+        menuItem -l "命名空间...  "                           -c $remove_nameSpace;
+        menuItem -l "charmap骨骼锁定..  "                     -c $charmap_lockjoint;
+        menuItem -l "shotgunr提交加initialpostitionAttr"      -c $add_initialpostitionAttr;
+    setParent -menu ..;
+
+    // ---------- 修改编辑 ----------
+    menuItem -to 1 -l "修改编辑   " -sm 1;
+        menuItem -l "RIG小工具  "             -c $Riging_tool;
+        menuItem -l "角色骨骼模型锁定开关  "  -c $on_off;
+        menuItem -l "属性上下移动  "          -c $atter_updown;
+        menuItem -l "dx11_fxo创建  "          -c $dx11_fxo;
+        menuItem -l "取消锁定  "              -c $un_lock;
+        menuItem -l "中心点释放"              -c $pivot_lock;
+        menuItem -l "多物体属性关联...  "     -c $Attr_link;
+        menuItem -l "骨骼链缩放关联...  "     -c $jointScale;
+        menuItem -l "毛发缩放关联...  "       -c $shaveScale;
+        menuItem -l "blendshpae重建...  "     -c $rebuildblend;
+        menuItem -l "骨骼轴向调整工具  "      -c $orientHierarchy;
+    setParent -menu ..;
+
+    // ---------- 设置创建 ----------
+    menuItem -to 1 -l "设置创建   " -sm 1;
+        menuItem -l "顶点添加毛囊...   "          -c $addfollicle;
+        menuItem -l "创建尾巴软体绑定...   "      -c $create_tail_rig;
+        menuItem -l "次级骨骼加控制器...   "      -c $add_ctrl_tools;
+        menuItem -l "key动画转SDK动画...   "      -c $key_to_set;
+        menuItem -l "创建controlSet节点   "       -c $controlSet;
+        menuItem -l "创建控制器...   "            -c $controlMaker;
+        menuItem -l "指定位置创建控制器_KM   "    -c $km_control;
+        menuItem -l "曲线创建物体...   "          -c $createObj;
+        menuItem -l "自动化动画...  "             -c $addExpression;
+        menuItem -l "铆钉工具   "                 -c $addLocator;
+        menuItem -l "权重顶点约束工具"            -c $skinWeightConstrainTool;
+        menuItem -d 1;
+    setParent -menu ..;
+
+    // ---------- 变形权重 ----------
+    menuItem -to 1 -l "变形权重  " -sm 1;
+        menuItem -l "blend镜像...  "          -c $MirrorBS;
+        menuItem -l "拷权重  "                -c $copyWeights;
+        menuItem -l "簇拷权重...  "           -c $cluster_copy;
+        menuItem -l "簇的镜像生成器..."       -c $cluster_mirror;
+        menuItem -l "点对点权重  "            -c $pointToPoint;
+        menuItem -l "关节肌肉权重传递  "      -c $muscleWeightTransfer;
+        menuItem -l "线变形权重  "            -c $wireWeight;
+        menuItem -l "存储拷权重  "            -c $copyWeights_of3d;
+    setParent -menu ..;
+
+    menuItem -d 1;
+    menuItem -to 1 -l "移除工具集   " -c "if(`menu -q -ex setupTools`) deleteUI setupTools;";
+    menuItem -l "帮助和信息   " -c "helpInfo";
+    menuItem -l "刷新   " -c $refresh;
+    setParent -menu ..;
+}
+
+// ======================== 帮助窗口 ========================
+global proc helpInfo()
+{
+    if (`window -ex helpInfoWindow`) deleteUI helpInfoWindow;
+    window -t "关于RigTools" helpInfoWindow;
+    columnLayout -adj 1 catch_columnLayout;
+    text -l ("\n美术部门Rig快捷栏 v3.1\n\n"
+           + "更新日期：2023.07.27\n\n"
+           + "作者：初六\n需要帮助请联系我\n\n"
+           + "本次添加：N20加控制器\n\n"
+           + " chuliu@bytedance.com\n\n"
+           + "(C)  ∞ thankyou！");
+    showWindow helpInfoWindow;
+}
+
+// ======================== userSetup 自动注册 ========================
+global proc SETUPTools()
+{
+    string $scriptPath    = `internalVar -userScriptDir`;
+    string $userSetupPath = $scriptPath + "userSetup.mel";
+    string $thePaths      = "Y:/RigTools/SETUPTools.mel";
+    string $tag           = "//设置工具栏;\n";
+    string $block         = ("\n" + $tag + "source \"" + $thePaths + "\";\n\n");
+
+    if (!`filetest -f $userSetupPath`)
+    {
+        $suf = `fopen $userSetupPath "w"`;
+        fprint $suf ("\n//RigTools;\n");
+        fprint $suf ("source \"" + $thePaths + "\";\n\n");
+        fclose $suf;
+    }
+    else
+    {
+        // 检查是否已经注册过
+        int $found = 0;
+        $suf = `fopen $userSetupPath "r"`;
+        string $line = `fgetline $suf`;
+        while (size($line) > 0)
+        {
+            if (size($line) != 1 && `gmatch $line $tag`)
+                $found = 1;
+            $line = `fgetline $suf`;
+        }
+        fclose $suf;
+
+        if (!$found)
+        {
+            $suf = `fopen $userSetupPath "a"`;
+            fprint $suf $block;
+            fclose $suf;
+        }
+    }
+}
+
+SETUPTools();
+// ======================== end ========================
