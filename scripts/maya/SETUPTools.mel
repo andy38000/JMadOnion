@@ -1,5 +1,5 @@
 // ============================================================
-//  JN_Rig工具架  v3.1  —— 简化版
+//  JN_Rig工具架  v3.1 -- 简化版
 //  更新日期：2023.07.27
 //  作者：初六
 // ============================================================
@@ -9,7 +9,7 @@ global string $address;
 $address = "Z:/rig/A/RigTools/";
 
 // --------------- 辅助函数：生成 source 命令字符串 ---------------
-//  用法：srcCmd("子路径/文件.mel")  →  返回  source "Z:/rig/A/RigTools/子路径/文件.mel"
+//  用法：srcCmd("子路径/文件.mel")  ->  返回  source "Z:/rig/A/RigTools/子路径/文件.mel"
 global proc string srcCmd(string $relPath)
 {
     global string $address;
@@ -160,145 +160,151 @@ global proc string srcCmd(string $relPath)
 
     // ---------- 模型工具 ----------
     menuItem -to 1 -l "模型工具   " -sm 1;
-        menuItem -to 1 -l "特征捏脸工具  "         -c $pinckface;
-        menuItem -to 1 -l "特征捏脸工具2.0  "      -c $Mackface;
-        menuItem -to 1 -l "BlendShape替换工具  "    -c $replaceshape;
-        menuItem -to 1 -l "模型绑定替换工具  "      -c $ReplaceSkin;
-        menuItem -to 1 -l "装互换工具  "            -c $ReplaceEquip;
-        menuItem -to 1 -l "蒙皮模型修改  "          -c $SkinFixMod;
-        menuItem -to 1 -l "模型接缝传权重  "        -c $CopySeamWeight;
-        menuItem -to 1 -l "权重优化清理工具  "      -c $SkinCleanTools;
-        menuItem -to 1 -l "权重Pose核审工具  "      -c $weighePoseCheck;
-        menuItem -to 1 -l "设置面部模型点位置  "    -c $setFacePoint;
-        menuItem -to 1 -l "设置脖子模型点位置  "    -c $setNeckPoint;
-        menuItem -d 1;
-    setParent -menu ..;
+    menuItem -to 1 -l "特征捏脸工具  " -c $pinckface;
+    menuItem -to 1 -l "特征捏脸工具2.0  " -c $Mackface;
+    menuItem -to 1 -l "BlendShape替换工具  " -c $replaceshape;
+    menuItem -to 1 -l "模型绑定替换工具  " -c $ReplaceSkin;
+    menuItem -to 1 -l "装互换工具  " -c $ReplaceEquip;
+    menuItem -to 1 -l "蒙皮模型修改  " -c $SkinFixMod;
+    menuItem -to 1 -l "模型接缝传权重  " -c $CopySeamWeight;
+    menuItem -to 1 -l "权重优化清理工具  " -c $SkinCleanTools;
+    menuItem -to 1 -l "权重Pose核审工具  " -c $weighePoseCheck;
+    menuItem -to 1 -l "设置面部模型点位置  " -c $setFacePoint;
+    menuItem -to 1 -l "设置脖子模型点位置  " -c $setNeckPoint;
+    menuItem -d 1;
+    setParent -menu..;
     menuItem -d 1;
 
     // ---------- 动作工具 ----------
     menuItem -to 1 -l "动作工具   " -sm 1;
-        menuItem -to 1 -l "批量导出FBX动作工具  "   -c $export_fbx_anim;
-        menuItem -to 1 -l "顶点法线动画导出工具  "  -c $export_nor_anim;
-        menuItem -to 1 -l "批量替换引用文件工具  "   -c $replaceRefPath;
-        menuItem -to 1 -l "驱动数据导出工具  "      -c $Export_SDK_Tools;
-        menuItem -to 1 -l "表情控制器一键连接  "    -c $connect_bs;
-        menuItem -to 1 -l "表情数据一键导入  "      -c $import_animData;
-        menuItem -to 1 -l "V项目角色拆分  "         -c $Character_Seperate;
-        menuItem -to 1 -l "欧拉旋转动画均一化  "    -c $normalizeEulerAnimation;
-        menuItem -to 1 -l "武器挂点工具  "          -c $weaponPointTool;
-        menuItem -to 1 -l "J1通用骨骼加ADV控制器   " -sm 1;
-            menuItem -to 1 -l "手部世界轴向（老版）  " -c $add_HK_ctrl_HandWrold;
-            menuItem -to 1 -l "手部局部轴向  "        -c $add_HK_ctrl_HandObject;
-        setParent -menu ..;
-        menuItem -to 1 -l "J1_N05/B15系列骨骼加ADV控制器  " -c $add_N05_ctrl;
-        menuItem -to 1 -l "N20_Lydia骨骼加ADV控制器  "      -c $add_N20_ctrl;
-        menuItem -to 1 -l "动捕数据导入控制器  "    -c $mocapDataToCtrl;
-        menuItem -to 1 -l "J2_Props_Switch  "       -c $J2_Props_Switch;
-        menuItem -to 1 -l "影子动画  "              -c $onionSkinRenderer;
-        menuItem -d 1;
-    setParent -menu ..;
+    menuItem -to 1 -l "批量导出FBX动作工具  " -c $export_fbx_anim;
+    menuItem -to 1 -l "顶点法线动画导出工具  " -c $export_nor_anim;
+    menuItem -to 1 -l "批量替换引用文件工具  " -c $replaceRefPath;
+    menuItem -to 1 -l "驱动数据导出工具  " -c $Export_SDK_Tools;
+    menuItem -to 1 -l "表情控制器一键连接  " -c $connect_bs;
+    menuItem -to 1 -l "表情数据一键导入  " -c $import_animData;
+    menuItem -to 1 -l "V项目角色拆分  " -c $Character_Seperate;
+    menuItem -to 1 -l "欧拉旋转动画均一化  " -c $normalizeEulerAnimation;
+    menuItem -to 1 -l "武器挂点工具  " -c $weaponPointTool;
+    menuItem -to 1 -l "J1通用骨骼加ADV控制器   " -sm 1;
+    menuItem -to 1 -l "手部世界轴向（老版）  " -c $add_HK_ctrl_HandWrold;
+    menuItem -to 1 -l "手部局部轴向  " -c $add_HK_ctrl_HandObject;
+    setParent -menu..;
+    menuItem -to 1 -l "J1_N05/B15系列骨骼加ADV控制器  " -c $add_N05_ctrl;
+    menuItem -to 1 -l "N20_Lydia骨骼加ADV控制器  " -c $add_N20_ctrl;
+    menuItem -to 1 -l "动捕数据导入控制器  " -c $mocapDataToCtrl;
+    menuItem -to 1 -l "J2_Props_Switch  " -c $J2_Props_Switch;
+    menuItem -to 1 -l "影子动画  " -c $onionSkinRenderer;
+    menuItem -d 1;
+    menuItem -d 1;
+    setParent -menu..;
     menuItem -d 1;
 
     // ---------- 绑定工具 ----------
     menuItem -to 1 -l "绑定工具   " -sm 1;
-        menuItem -to 1 -l "身体绑定系统   " -sm 1;
-            menuItem -to 1 -l "新版（加强控制功能）  " -c $of3d_RDF_bodyRig;
-            menuItem -to 1 -l "老版（普通控制功能）  " -c $of3d_RDF_mocapRig;
-            menuItem -to 1 -l "中文版ADV  "           -c $chineseADV;
-            menuItem -to 1 -l "英文版ADV  "           -c $englishADV;
-            menuItem -d 1;
-        setParent -menu ..;
-        menuItem -to 1 -l "脸部绑定系统   " -sm 1;
-            menuItem -to 1 -l "blendshape加强版（facial系统）   " -c $of3d_RDF_faicalRig_shape;
-            menuItem -to 1 -l "joint加强版（facial系统）   "      -c $of3d_RDF_faicalRig;
-            menuItem -to 1 -l "控制器关联（facial系统）   "       -c $faicalRig_ctrlLink;
-            menuItem -to 1 -l "次级权重拆分   "                  -c $faicalRig_splitWeight;
-            menuItem -d 1;
-            menuItem -to 1 -l "卡通版（通用控制）   "            -c $of3d_RDF_faceRig;
-            menuItem -d 1;
-        setParent -menu ..;
-        menuItem -to 1 -l "检查工具   "          -c $check_Win;
-        menuItem -to 1 -l "修型工具   "          -c $fixshapetools;
-        menuItem -to 1 -l "J1规范化设置工具   "  -c $checkset;
-        menuItem -to 1 -l "J5规范化设置工具v1.0   " -c $J5_RigCheckTools;
-        menuItem -d 1;
-    setParent -menu ..;
+    menuItem -to 1 -l "身体绑定系统   " -sm 1;
+    menuItem -to 1 -l "新版（加强控制功能）  " -c $of3d_RDF_bodyRig;
+    menuItem -to 1 -l "老版（普通控制功能）  " -c $of3d_RDF_mocapRig;
+    menuItem -to 1 -l "中文版ADV  " -c $chineseADV;
+    menuItem -to 1 -l "英文版ADV  " -c $englishADV;
+    menuItem -d 1;
+    menuItem -d 1;
+    setParent -menu..;
+    menuItem -to 1 -l "脸部绑定系统   " -sm 1;
+    menuItem -to 1 -l "blendshape加强版（facial系统）   " -c $of3d_RDF_faicalRig_shape;
+    menuItem -to 1 -l "joint加强版（facial系统）   " -c $of3d_RDF_faicalRig;
+    menuItem -to 1 -l "控制器关联（facial系统）   " -c $faicalRig_ctrlLink;
+    menuItem -to 1 -l "次级权重拆分   " -c $faicalRig_splitWeight;
+    menuItem -d 1;
+    menuItem -to 1 -l "卡通版（通用控制）   " -c $of3d_RDF_faceRig;
+    menuItem -d 1;
+    setParent -menu..;
+    menuItem -to 1 -l "检查工具   " -c $check_Win;
+    menuItem -to 1 -l "修型工具   " -c $fixshapetools;
+    menuItem -to 1 -l "J1规范化设置工具   " -c $checkset;
+    menuItem -to 1 -l "J5规范化设置工具v1.0   " -c $J5_RigCheckTools;
+    menuItem -d 1;
+    setParent -menu..;
     menuItem -d 1;
 
     // ---------- 私人订制 ----------
     menuItem -to 1 -l "私人订制   " -sm 1;
-        menuItem -l "骨骼BS查询工具"       -c $queryTool;
-        menuItem -l "文件保存命名递增"     -c $saveobj;
-        menuItem -d 1;
-        menuItem -l "模型替换权重拷贝"     -c $SkinWeight;
-        menuItem -d 1;
-        menuItem -l "头部属性添加关联"     -c $attcon;
-        menuItem -d 1;
-        menuItem -l "adv_手部IK校轴"       -c $IKArm;
-        menuItem -d 1;
-        menuItem -l "poss穿插处理_bs"      -c $bs_poss;
-        menuItem -d 1;
-        menuItem -l "km_BSC"               -c $km_bsc;
-    setParent -menu ..;
+    menuItem -l "骨骼BS查询工具" -c $queryTool;
+    menuItem -l "文件保存命名递增" -c $saveobj;
+    menuItem -d 1;
+    menuItem -l "模型替换权重拷贝" -c $SkinWeight;
+    menuItem -d 1;
+    menuItem -l "头部属性添加关联" -c $attcon;
+    menuItem -d 1;
+    menuItem -l "adv_手部IK校轴" -c $IKArm;
+    menuItem -d 1;
+    menuItem -d 1;
+    menuItem -l "poss穿插处理_bs" -c $bs_poss;
+    menuItem -d 1;
+    menuItem -l "km_BSC" -c $km_bsc;
+    setParent -menu..;
 
     // ---------- 文件清理 ----------
     menuItem -to 1 -l "文件清理  " -sm 1;
-        menuItem -l "模型清理...   "                          -c $mod_clean;
-        menuItem -l "设置清理...   "                          -c $rig_clean;
-        menuItem -l "命名空间...  "                           -c $remove_nameSpace;
-        menuItem -l "charmap骨骼锁定..  "                     -c $charmap_lockjoint;
-        menuItem -l "shotgunr提交加initialpostitionAttr"      -c $add_initialpostitionAttr;
-    setParent -menu ..;
+    menuItem -l "模型清理...   " -c $mod_clean;
+    menuItem -l "设置清理...   " -c $rig_clean;
+    menuItem -l "命名空间...  " -c $remove_nameSpace;
+    menuItem -l "charmap骨骼锁定..  " -c $charmap_lockjoint;
+    menuItem -l "shotgunr提交加initialpostitionAttr" -c $add_initialpostitionAttr;
+    setParent -menu..;
 
     // ---------- 修改编辑 ----------
     menuItem -to 1 -l "修改编辑   " -sm 1;
-        menuItem -l "RIG小工具  "             -c $Riging_tool;
-        menuItem -l "角色骨骼模型锁定开关  "  -c $on_off;
-        menuItem -l "属性上下移动  "          -c $atter_updown;
-        menuItem -l "dx11_fxo创建  "          -c $dx11_fxo;
-        menuItem -l "取消锁定  "              -c $un_lock;
-        menuItem -l "中心点释放"              -c $pivot_lock;
-        menuItem -l "多物体属性关联...  "     -c $Attr_link;
-        menuItem -l "骨骼链缩放关联...  "     -c $jointScale;
-        menuItem -l "毛发缩放关联...  "       -c $shaveScale;
-        menuItem -l "blendshpae重建...  "     -c $rebuildblend;
-        menuItem -l "骨骼轴向调整工具  "      -c $orientHierarchy;
-    setParent -menu ..;
+    menuItem -l "RIG小工具  " -c $Riging_tool;
+    menuItem -l "角色骨骼模型锁定开关  " -c $on_off;
+    menuItem -l "属性上下移动  " -c $atter_updown;
+    menuItem -l "dx11_fxo创建  " -c $dx11_fxo;
+    menuItem -l "取消锁定  " -c $un_lock;
+    menuItem -l "中心点释放" -c $pivot_lock;
+    menuItem -l "多物体属性关联...  " -c $Attr_link;
+    menuItem -l "骨骼链缩放关联...  " -c $jointScale;
+    menuItem -l "毛发缩放关联...  " -c $shaveScale;
+    menuItem -l "blendshpae重建...  " -c $rebuildblend;
+    menuItem -l "骨骼轴向调整工具  " -c $orientHierarchy;
+    setParent -menu..;
 
     // ---------- 设置创建 ----------
     menuItem -to 1 -l "设置创建   " -sm 1;
-        menuItem -l "顶点添加毛囊...   "          -c $addfollicle;
-        menuItem -l "创建尾巴软体绑定...   "      -c $create_tail_rig;
-        menuItem -l "次级骨骼加控制器...   "      -c $add_ctrl_tools;
-        menuItem -l "key动画转SDK动画...   "      -c $key_to_set;
-        menuItem -l "创建controlSet节点   "       -c $controlSet;
-        menuItem -l "创建控制器...   "            -c $controlMaker;
-        menuItem -l "指定位置创建控制器_KM   "    -c $km_control;
-        menuItem -l "曲线创建物体...   "          -c $createObj;
-        menuItem -l "自动化动画...  "             -c $addExpression;
-        menuItem -l "铆钉工具   "                 -c $addLocator;
-        menuItem -l "权重顶点约束工具"            -c $skinWeightConstrainTool;
-        menuItem -d 1;
-    setParent -menu ..;
+    menuItem -l "顶点添加毛囊...   " -c $addfollicle;
+    menuItem -l "创建尾巴软体绑定...   " -c $create_tail_rig;
+    menuItem -l "次级骨骼加控制器...   " -c $add_ctrl_tools;
+    menuItem -l "key动画转SDK动画...   " -c $key_to_set;
+    menuItem -l "创建controlSet节点   " -c $controlSet;
+    menuItem -l "创建控制器...   " -c $controlMaker;
+    menuItem -l "指定位置创建控制器_KM   " -c $km_control;
+    menuItem -l "曲线创建物体...   " -c $createObj;
+    menuItem -l "自动化动画...  " -c $addExpression;
+    menuItem -l "铆钉工具   " -c $addLocator;
+    menuItem -l "权重顶点约束工具" -c $skinWeightConstrainTool;
+    menuItem -d 1;
+    setParent -menu..;
 
     // ---------- 变形权重 ----------
     menuItem -to 1 -l "变形权重  " -sm 1;
-        menuItem -l "blend镜像...  "          -c $MirrorBS;
-        menuItem -l "拷权重  "                -c $copyWeights;
-        menuItem -l "簇拷权重...  "           -c $cluster_copy;
-        menuItem -l "簇的镜像生成器..."       -c $cluster_mirror;
-        menuItem -l "点对点权重  "            -c $pointToPoint;
-        menuItem -l "关节肌肉权重传递  "      -c $muscleWeightTransfer;
-        menuItem -l "线变形权重  "            -c $wireWeight;
-        menuItem -l "存储拷权重  "            -c $copyWeights_of3d;
-    setParent -menu ..;
+    menuItem -l "blend镜像...  " -c $MirrorBS;
+    menuItem -l "拷权重  " -c $copyWeights;
+    menuItem -l "簇拷权重...  " -c $cluster_copy;
+    menuItem -l "簇的镜像生成器..." -c $cluster_mirror;
+    menuItem -l "点对点权重  " -c $pointToPoint;
+    menuItem -l "关节肌肉权重传递  " -c $muscleWeightTransfer;
+    menuItem -l "线变形权重  " -c $wireWeight;
+    menuItem -l "存储拷权重  " -c $copyWeights_of3d;
+    setParent -menu..;
 
+    setParent -menu..;
     menuItem -d 1;
-    menuItem -to 1 -l "移除工具集   " -c "if(`menu -q -ex setupTools`) deleteUI setupTools;";
+    menuItem -to 1 -l "移除工具集   " -c "if(`menu -q -ex setupTools`)deleteUI setupTools;";
     menuItem -l "帮助和信息   " -c "helpInfo";
+    setParent -menu..;
     menuItem -l "刷新   " -c $refresh;
-    setParent -menu ..;
+    setParent -menu..;
 }
+
 
 // ======================== 帮助窗口 ========================
 global proc helpInfo()
@@ -306,52 +312,61 @@ global proc helpInfo()
     if (`window -ex helpInfoWindow`) deleteUI helpInfoWindow;
     window -t "关于RigTools" helpInfoWindow;
     columnLayout -adj 1 catch_columnLayout;
-    text -l ("\n美术部门Rig快捷栏 v3.1\n\n"
-           + "更新日期：2023.07.27\n\n"
-           + "作者：初六\n需要帮助请联系我\n\n"
-           + "本次添加：N20加控制器\n\n"
-           + " chuliu@bytedance.com\n\n"
-           + "(C)  ∞ thankyou！");
+    text -l "\n美术部门Rig快捷栏 v3.1\n\n更新日期：2023.07.27\n\n作者：初六\n需要帮助请联系我 \n\n本次添加：N20加控制器 \n\n chuliu@bytedance.com\n\n(C)  thankyou！";
     showWindow helpInfoWindow;
 }
 
+
 // ======================== userSetup 自动注册 ========================
+global string $scriptPath;
+global string $userSetupPath;
+$scriptPath = `internalVar -userScriptDir`;
+$userSetupPath = $scriptPath + "userSetup.mel";
+
 global proc SETUPTools()
 {
-    string $scriptPath    = `internalVar -userScriptDir`;
-    string $userSetupPath = $scriptPath + "userSetup.mel";
-    string $thePaths      = "Y:/RigTools/SETUPTools.mel";
-    string $tag           = "//设置工具栏;\n";
-    string $block         = ("\n" + $tag + "source \"" + $thePaths + "\";\n\n");
+    global string $userSetupPath;
+    $thePaths = "Y:/RigTools/SETUPTools.mel";
 
     if (!`filetest -f $userSetupPath`)
     {
         $suf = `fopen $userSetupPath "w"`;
-        fprint $suf ("\n//RigTools;\n");
+        fprint $suf "\n";
+        fprint $suf "\n//RigTools;\n";
         fprint $suf ("source \"" + $thePaths + "\";\n\n");
         fclose $suf;
     }
     else
     {
-        // 检查是否已经注册过
-        int $found = 0;
-        $suf = `fopen $userSetupPath "r"`;
-        string $line = `fgetline $suf`;
-        while (size($line) > 0)
-        {
-            if (size($line) != 1 && `gmatch $line $tag`)
-                $found = 1;
-            $line = `fgetline $suf`;
-        }
-        fclose $suf;
-
-        if (!$found)
+        int $existyzlTOOLS = fileRead();
+        if ($existyzlTOOLS != 1)
         {
             $suf = `fopen $userSetupPath "a"`;
-            fprint $suf $block;
+            fprint $suf "\n";
+            fprint $suf "\n//设置工具栏;\n";
+            fprint $suf ("source \"" + $thePaths + "\";\n\n");
             fclose $suf;
         }
     }
+}
+
+global proc int fileRead()
+{
+    global string $userSetupPath;
+    $suf = `fopen $userSetupPath "r"`;
+    string $sufLine = `fgetline $suf`;
+    int $rusultString = 0;
+    while (size($sufLine) > 0)
+    {
+        if (size($sufLine) != 1)
+        {
+            int $existyzlTOOLS = `gmatch $sufLine "//设置工具栏;\n"`;
+            if ($existyzlTOOLS == 1) $rusultString = 1;
+        }
+        $sufLine = `fgetline $suf`;
+    }
+    fclose $suf;
+    return $rusultString;
 }
 
 SETUPTools();
