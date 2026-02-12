@@ -1,0 +1,80 @@
+========================================================
+  Autodesk Maya / 3ds Max 残留清理工具 v1.0
+  使用说明
+========================================================
+
+一、功能说明
+--------
+本工具用于清理 Maya 和 3ds Max 卸载后的残留文件，支持：
+  - 按版本精确清理（选择哪个版本就清理哪个版本）
+  - 不影响其他已安装的版本
+  - 支持 Maya 2016 ~ 2026 所有版本
+  - 支持 3ds Max 2016 ~ 2026 所有版本
+  - 自动检测系统中存在残留的版本
+  - 扫描预览功能，清理前可先查看将被删除的内容
+  - 支持清理：安装目录、用户配置、AppData、注册表、临时文件等
+
+二、使用方法
+--------
+
+方法一：图形界面（推荐）
+  1. 右键 run_cleanup.bat，选择"以管理员身份运行"
+  2. 在左侧选择软件类型（Maya 或 3ds Max）
+  3. 勾选要清理的版本（可多选）
+  4. 点击"自动检测"可自动发现有残留的版本
+  5. 点击"扫描残留"预览将被清理的内容
+  6. 确认后点击"开始清理"执行清理
+
+方法二：命令行
+  # 检测系统中有残留的版本
+  python cleanup_cli.py --detect all
+
+  # 扫描 Maya 2024 残留（不清理）
+  python cleanup_cli.py -s maya -v 2024 --scan
+
+  # 清理 Maya 2018 和 2019 的残留
+  python cleanup_cli.py -s maya -v 2018,2019 --clean
+
+  # 预览清理（不实际删除）
+  python cleanup_cli.py -s max -v 2024 --clean --dry-run
+
+  # 清理 3ds Max 2020 残留（跳过确认）
+  python cleanup_cli.py -s max -v 2020 --clean -y
+
+三、清理范围
+--------
+本工具会清理以下位置的版本特定残留（仅针对选中的版本）：
+
+Maya:
+  - Program Files\Autodesk\Maya<版本>     (安装目录)
+  - Documents\maya\<版本>                   (用户配置)
+  - AppData\Local\Autodesk\Maya\<版本>     (本地数据)
+  - AppData\Roaming\Autodesk\Maya\<版本>   (漫游数据)
+  - ProgramData\Autodesk\Maya\<版本>       (共享数据)
+  - 注册表 HKLM/HKCU\SOFTWARE\Autodesk\Maya\<版本>
+  - 临时文件
+
+3ds Max:
+  - Program Files\Autodesk\3ds Max <版本>  (安装目录)
+  - Documents\3dsMax\<版本>                 (用户配置)
+  - AppData\Local\Autodesk\3dsMax\<版本>   (本地数据)
+  - AppData\Roaming\Autodesk\3dsMax\<版本> (漫游数据)
+  - ProgramData\Autodesk\3dsMax\<版本>     (共享数据)
+  - 注册表 HKLM/HKCU\SOFTWARE\Autodesk\3dsMax\<版本>
+  - 临时文件
+
+四、注意事项
+--------
+  1. 建议以管理员身份运行，否则无法清理 Program Files 和注册表
+  2. 清理操作不可撤销，请先使用"扫描"功能确认清理内容
+  3. 仅清理选中的版本，不会影响其他版本的正常使用
+  4. "清理共享组件"功能会影响所有 Autodesk 产品，请谨慎使用
+  5. 建议在清理前关闭所有 Maya 和 3ds Max 程序
+
+五、系统要求
+--------
+  - Windows 7/10/11
+  - Python 3.6 或更高版本（已内置 tkinter）
+  - 建议以管理员权限运行
+
+========================================================
