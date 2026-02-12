@@ -1,20 +1,47 @@
 ========================================================
-  Autodesk Maya / 3ds Max 残留清理工具 v1.0
+  Autodesk Maya / 3ds Max 残留清理工具 v1.1
   使用说明
 ========================================================
 
 一、功能说明
 --------
-本工具用于清理 Maya 和 3ds Max 卸载后的残留文件，支持：
-  - 按版本精确清理（选择哪个版本就清理哪个版本）
-  - 不影响其他已安装的版本
-  - 支持 Maya 2016 ~ 2026 所有版本
-  - 支持 3ds Max 2016 ~ 2026 所有版本
-  - 自动检测系统中存在残留的版本
-  - 扫描预览功能，清理前可先查看将被删除的内容
-  - 支持清理：安装目录、用户配置、AppData、注册表、临时文件等
+本工具用于清理 Maya 和 3ds Max 卸载后的残留文件，以及修复常见的
+许可证问题（如反复弹出 "re-enter serial number" 序列号窗口）。
 
-二、使用方法
+主要功能：
+  ★ 许可证修复 - 解决 Maya/Max 反复要求输入序列号的弹窗问题
+  ★ 残留清理   - 按版本精确清理卸载残留文件
+  ★ 版本隔离   - 选择哪个版本就处理哪个，不影响其他版本
+  ★ 支持版本   - Maya 2016~2026 / 3ds Max 2016~2026
+
+二、解决 Maya 2018 "re-enter serial number" 弹窗
+--------
+这是最常见的问题。原因是许可证缓存数据损坏。
+
+方法一：图形界面
+  1. 右键 run_cleanup.bat，选择"以管理员身份运行"
+  2. 左侧选择 "Maya"
+  3. 勾选 "2018"
+  4. 点击 [修复许可证弹窗] 按钮
+  5. 确认后工具会自动清除损坏的许可证数据
+  6. 重新启动 Maya 2018
+  7. 弹出正常的激活窗口后，输入序列号或登录完成激活
+
+方法二：命令行
+  python cleanup_cli.py -s maya -v 2018 --repair-license
+
+如果单版本修复无效，尝试完全重置：
+  python cleanup_cli.py --reset-license
+
+修复原理：
+  1. 停止 Autodesk 许可证相关服务（AdskLicensing, FlexNet）
+  2. 清除损坏的 FLEXnet 许可证数据文件 (C:\ProgramData\FLEXnet\)
+  3. 清除 Adlm 产品注册缓存 (C:\ProgramData\Autodesk\Adlm\)
+  4. 清除 Web Services 登录缓存
+  5. 清除注册表中的许可证注册信息
+  → 下次启动时弹出正常的激活/登录流程
+
+三、完全清理残留
 --------
 
 方法一：图形界面（推荐）
@@ -38,10 +65,13 @@
   # 预览清理（不实际删除）
   python cleanup_cli.py -s max -v 2024 --clean --dry-run
 
-  # 清理 3ds Max 2020 残留（跳过确认）
-  python cleanup_cli.py -s max -v 2020 --clean -y
+  # 修复 Maya 2018 许可证弹窗
+  python cleanup_cli.py -s maya -v 2018 --repair-license
 
-三、清理范围
+  # 完全重置所有许可证
+  python cleanup_cli.py --reset-license
+
+四、清理范围
 --------
 本工具会清理以下位置的版本特定残留（仅针对选中的版本）：
 
@@ -63,15 +93,24 @@ Maya:
   - 注册表 HKLM/HKCU\SOFTWARE\Autodesk\3dsMax\<版本>
   - 临时文件
 
-四、注意事项
+许可证修复额外清理：
+  - ProgramData\FLEXnet\*.data             (FLEXnet 许可证数据)
+  - ProgramData\Autodesk\Adlm\<产品码>    (产品注册数据)
+  - ProgramData\Autodesk\Adlm\ProductInformation.pit
+  - AppData\...\Autodesk\Web Services      (Web 登录缓存)
+  - 注册表 ...\Maya\<版本>\Registration    (注册信息)
+
+五、注意事项
 --------
   1. 建议以管理员身份运行，否则无法清理 Program Files 和注册表
   2. 清理操作不可撤销，请先使用"扫描"功能确认清理内容
   3. 仅清理选中的版本，不会影响其他版本的正常使用
-  4. "清理共享组件"功能会影响所有 Autodesk 产品，请谨慎使用
-  5. 建议在清理前关闭所有 Maya 和 3ds Max 程序
+  4. 许可证修复后需要重新激活软件（输入序列号或登录账号）
+  5. "完全重置许可证" 会影响所有 Autodesk 产品
+  6. "清理共享组件" 会影响所有 Autodesk 产品，请谨慎使用
+  7. 建议在操作前关闭所有 Maya 和 3ds Max 程序
 
-五、系统要求
+六、系统要求
 --------
   - Windows 7/10/11
   - Python 3.6 或更高版本（已内置 tkinter）

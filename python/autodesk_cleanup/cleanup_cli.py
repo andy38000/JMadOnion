@@ -28,6 +28,9 @@ try:
         cleanup_shared_components,
         detect_installed_maya_versions,
         detect_installed_max_versions,
+        scan_license_issues,
+        repair_license,
+        repair_license_full_reset,
     )
 except ImportError:
     from autodesk_cleanup.cleanup_core import (
@@ -39,6 +42,9 @@ except ImportError:
         cleanup_shared_components,
         detect_installed_maya_versions,
         detect_installed_max_versions,
+        scan_license_issues,
+        repair_license,
+        repair_license_full_reset,
     )
 
 
@@ -160,6 +166,83 @@ def cmd_clean(args):
     print("\n清理完成！")
 
 
+def cmd_repair_license(args):
+    """修复许可证问题（解决序列号弹窗）"""
+    software = args.software.lower()
+    versions = [v.strip() for v in args.version.split(",")]
+    dry_run = args.dry_run
+    sw_name = "Maya" if software == "maya" else "3ds Max"
+
+    print(f"\n{'='*50}")
+    print(f"  许可证修复 - {sw_name}")
+    print(f"  版本: {', '.join(versions)}")
+    print(f"{'='*50}")
+
+    # 先诊断
+    for version in versions:
+        issues = scan_license_issues(software, version)
+        count = sum(len(v) for v in issues.values())
+        print(f"\n--- {sw_name} {version} 许可证诊断 ---")
+        if count == 0:
+            print("  未发现许可证相关问题文件")
+            continue
+
+        print(f"  发现 {count} 项许可证相关数据:")
+        if issues["flexnet_files"]:
+            print(f"  FLEXnet 数据文件 ({len(issues['flexnet_files'])}):")
+            for f in issues["flexnet_files"]:
+                print(f"    {f}")
+        if issues["adlm_dirs"]:
+            print(f"  Adlm 产品目录:")
+            for d in issues["adlm_dirs"]:
+                print(f"    {d}")
+        if issues["pit_file"]:
+            print(f"  PIT 文件:")
+            for f in issues["pit_file"]:
+                print(f"    {f}")
+        if issues["webservices_dirs"]:
+            print(f"  Web Services 缓存:")
+            for d in issues["webservices_dirs"]:
+                print(f"    {d}")
+        if issues["registry_keys"]:
+            print(f"  注册表许可证项:")
+            for r in issues["registry_keys"]:
+                print(f"    {r}")
+
+    if not dry_run and not args.yes:
+        print(f"\n修复后需要重新激活/登录 {sw_name}。")
+        confirm = input("  确认执行修复? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("  已取消")
+            return
+
+    for version in versions:
+        print(f"\n--- 修复 {sw_name} {version} 许可证 ---")
+        result = repair_license(software, version, dry_run=dry_run)
+        print(result.summary)
+        if args.verbose:
+            print(result.detail_log)
+
+    print(f"\n许可证修复完成！")
+    print(f"请重新启动 {sw_name}，然后重新输入序列号或登录完成激活。")
+
+
+def cmd_repair_license_reset(args):
+    """完全重置所有许可证"""
+    print("\n⚠️  完全重置所有 Autodesk 产品的许可证数据！")
+    if not args.yes:
+        confirm = input("  确认继续? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("  已取消")
+            return
+
+    result = repair_license_full_reset(dry_run=args.dry_run)
+    print(result.summary)
+    if args.verbose:
+        print(result.detail_log)
+    print("\n所有 Autodesk 产品需要重新激活。")
+
+
 def cmd_clean_shared(args):
     """清理共享组件"""
     print("\n⚠️  警告：清理共享组件会影响所有 Autodesk 产品！")
@@ -216,6 +299,16 @@ def main():
         help="自动检测已安装版本: maya, max, all",
     )
     parser.add_argument(
+        "--repair-license",
+        action="store_true",
+        help="修复许可证弹窗问题（解决反复要求输入序列号）",
+    )
+    parser.add_argument(
+        "--reset-license",
+        action="store_true",
+        help="完全重置所有产品的许可证数据（危险操作）",
+    )
+    parser.add_argument(
         "--shared",
         action="store_true",
         help="清理共享组件（危险操作）",
@@ -251,6 +344,11 @@ def main():
         print("    python cleanup_cli.py -s maya -v 2018,2019 --clean")
         print("  预览清理 3ds Max 2024:")
         print("    python cleanup_cli.py -s max -v 2024 --clean --dry-run")
+        print("")
+        print("  ★ 修复 Maya 2018 许可证弹窗:")
+        print("    python cleanup_cli.py -s maya -v 2018 --repair-license")
+        print("  ★ 完全重置所有许可证:")
+        print("    python cleanup_cli.py --reset-license")
         return
 
     if args.detect:
@@ -258,6 +356,12 @@ def main():
 
     if args.scan and args.software and args.version:
         cmd_scan(args)
+
+    if args.repair_license and args.software and args.version:
+        cmd_repair_license(args)
+
+    if args.reset_license:
+        cmd_repair_license_reset(args)
 
     if args.clean:
         if args.shared:

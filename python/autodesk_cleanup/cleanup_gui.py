@@ -31,6 +31,9 @@ try:
         cleanup_shared_components,
         detect_installed_maya_versions,
         detect_installed_max_versions,
+        scan_license_issues,
+        repair_license,
+        repair_license_full_reset,
         CleanupResult,
         ScanResult,
     )
@@ -46,6 +49,9 @@ except ImportError:
         cleanup_shared_components,
         detect_installed_maya_versions,
         detect_installed_max_versions,
+        scan_license_issues,
+        repair_license,
+        repair_license_full_reset,
         CleanupResult,
         ScanResult,
     )
@@ -390,13 +396,52 @@ class AutodeskCleanupApp:
         )
         self.clean_btn.pack(fill=tk.X, pady=(0, 5))
 
+        # 分隔线
+        sep = tk.Frame(inner, bg=COLORS["border"], height=1)
+        sep.pack(fill=tk.X, pady=5)
+
+        # 许可证修复按钮 (解决序列号弹窗)
+        self.license_btn = tk.Button(
+            inner,
+            text="修复许可证弹窗",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            bg="#8e44ad",
+            fg="white",
+            activebackground="#7d3c98",
+            activeforeground="white",
+            relief=tk.FLAT,
+            cursor="hand2",
+            height=2,
+            command=self._repair_license,
+        )
+        self.license_btn.pack(fill=tk.X, pady=(0, 5))
+
+        # 许可证完全重置按钮
+        self.license_reset_btn = tk.Button(
+            inner,
+            text="完全重置许可证 (所有产品)",
+            font=("Microsoft YaHei UI", 9),
+            bg=COLORS["warning"],
+            fg="white",
+            activebackground="#e67e22",
+            activeforeground="white",
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=self._repair_license_full_reset,
+        )
+        self.license_reset_btn.pack(fill=tk.X, pady=(0, 5))
+
+        # 分隔线
+        sep2 = tk.Frame(inner, bg=COLORS["border"], height=1)
+        sep2.pack(fill=tk.X, pady=5)
+
         # 清理共享组件按钮
         self.shared_btn = tk.Button(
             inner,
             text="清理共享组件 (谨慎)",
             font=("Microsoft YaHei UI", 9),
-            bg=COLORS["warning"],
-            fg="white",
+            bg=COLORS["border"],
+            fg=COLORS["text_secondary"],
             activebackground="#e67e22",
             activeforeground="white",
             relief=tk.FLAT,
@@ -496,12 +541,21 @@ class AutodeskCleanupApp:
             )
             self._log("")
 
-        self._log("提示：", "info")
+        self._log("功能说明：", "info")
+        self._log("", "info")
+        self._log("  [扫描残留] / [开始清理]", "header")
+        self._log("    完全清除选中版本的卸载残留文件", "info")
+        self._log("", "info")
+        self._log("  [修复许可证弹窗] ← 解决序列号弹窗问题！", "header")
+        self._log("    修复 Maya/Max 反复要求输入序列号的问题", "info")
+        self._log("    原理：清除损坏的许可证缓存数据", "info")
+        self._log("    修复后重新启动软件即可正常激活", "info")
+        self._log("", "info")
+        self._log("使用步骤：", "info")
         self._log("  1. 选择左侧软件类型 (Maya/3ds Max)", "info")
-        self._log("  2. 勾选要清理的版本（可多选）", "info")
-        self._log("  3. 点击 [扫描残留] 查看将被清理的内容", "info")
-        self._log("  4. 确认后点击 [开始清理] 执行清理", "info")
-        self._log("  5. 仅清理选中版本，不会影响其他版本", "info")
+        self._log("  2. 勾选要处理的版本（可多选）", "info")
+        self._log("  3. 点击对应功能按钮", "info")
+        self._log("  4. 仅影响选中版本，不会影响其他版本", "info")
         self._log("")
 
     # ============================================================
@@ -868,6 +922,217 @@ class AutodeskCleanupApp:
             f"删除注册表项: {total_reg}\n"
             f"失败: {total_failed}",
         )
+
+    # ============================================================
+    # 许可证修复 (解决 "re-enter serial number" 弹窗)
+    # ============================================================
+
+    def _repair_license(self):
+        """修复选中版本的许可证问题"""
+        selected = self._get_selected_versions()
+        if not selected:
+            messagebox.showwarning("提示", "请先选择要修复的版本")
+            return
+
+        if self.is_scanning or self.is_cleaning:
+            return
+
+        software = self.software_var.get()
+        sw_lower = "maya" if software == "Maya" else "max"
+
+        # 先扫描许可证问题
+        self._log(f"\n{'='*50}", "separator")
+        self._log(f"  许可证问题诊断 - {software}", "header")
+        self._log(f"  版本: {', '.join(selected)}", "info")
+        self._log(f"{'='*50}", "separator")
+
+        total_issues = 0
+        for version in selected:
+            issues = scan_license_issues(sw_lower, version)
+            count = sum(len(v) for v in issues.values())
+            total_issues += count
+
+            self._log(f"\n--- {software} {version} 许可证诊断 ---", "header")
+            if count == 0:
+                self._log("  未发现许可证相关问题文件", "info")
+                continue
+
+            self._log(f"  发现 {count} 项许可证相关数据:", "warning")
+
+            if issues["flexnet_files"]:
+                self._log(f"  FLEXnet 数据文件 ({len(issues['flexnet_files'])}):", "warning")
+                for f in issues["flexnet_files"]:
+                    self._log(f"    {f}", "info")
+
+            if issues["adlm_dirs"]:
+                self._log(f"  Adlm 产品目录 ({len(issues['adlm_dirs'])}):", "warning")
+                for d in issues["adlm_dirs"]:
+                    self._log(f"    {d}", "info")
+
+            if issues["pit_file"]:
+                self._log(f"  PIT 文件:", "warning")
+                for f in issues["pit_file"]:
+                    self._log(f"    {f}", "info")
+
+            if issues["webservices_dirs"]:
+                self._log(f"  Web Services 缓存 ({len(issues['webservices_dirs'])}):", "warning")
+                for d in issues["webservices_dirs"]:
+                    self._log(f"    {d}", "info")
+
+            if issues["registry_keys"]:
+                self._log(f"  注册表许可证项 ({len(issues['registry_keys'])}):", "warning")
+                for r in issues["registry_keys"]:
+                    self._log(f"    {r}", "info")
+
+        if total_issues == 0:
+            self._log("\n未发现许可证相关问题。如果仍有弹窗，请尝试 [完全重置许可证]。", "info")
+            return
+
+        # 确认修复
+        msg = (
+            f"诊断发现 {total_issues} 项许可证相关数据。\n\n"
+            f"修复将会：\n"
+            f"  1. 停止 Autodesk 许可证服务\n"
+            f"  2. 清除损坏的 FLEXnet 许可证数据\n"
+            f"  3. 清除产品注册缓存\n"
+            f"  4. 清除 Web 登录缓存\n"
+            f"  5. 清除注册表许可证信息\n\n"
+            f"修复后需要重新激活/登录 {software}。\n"
+            f"其他版本的 {software} 不受影响。\n\n"
+            f"确定执行修复？"
+        )
+        if not messagebox.askyesno("确认许可证修复", msg, icon="question"):
+            return
+
+        self.is_cleaning = True
+        self._set_status("正在修复许可证...", "#8e44ad")
+
+        def repair_thread():
+            try:
+                all_results = []
+                for version in selected:
+                    self.root.after(
+                        0,
+                        lambda v=version: self._set_status(
+                            f"正在修复 {software} {v} 许可证...", "#8e44ad"
+                        ),
+                    )
+
+                    repair_result = repair_license(sw_lower, version)
+                    all_results.append((version, repair_result))
+
+                    self.root.after(
+                        0, self._log_license_repair_result, version, repair_result
+                    )
+                    time.sleep(0.2)
+
+                self.root.after(0, self._on_license_repair_complete, all_results)
+            except Exception as e:
+                self.root.after(
+                    0, lambda: self._log(f"修复出错: {e}", "error")
+                )
+            finally:
+                self.is_cleaning = False
+
+        threading.Thread(target=repair_thread, daemon=True).start()
+
+    def _log_license_repair_result(self, version: str, result: CleanupResult):
+        """记录许可证修复结果"""
+        software = self.software_var.get()
+        self._log(f"\n--- {software} {version} 许可证修复结果 ---", "header")
+        self._log(result.summary, "success")
+        if result.detail_log.strip():
+            self._log(result.detail_log, "info")
+
+    def _on_license_repair_complete(self, all_results):
+        """许可证修复完成回调"""
+        software = self.software_var.get()
+        total_files = sum(len(r.removed_files) for _, r in all_results)
+        total_dirs = sum(len(r.removed_dirs) for _, r in all_results)
+        total_reg = sum(len(r.removed_registry) for _, r in all_results)
+        total_failed = sum(len(r.failed_items) for _, r in all_results)
+
+        self._log(f"\n{'='*50}", "separator")
+        self._log("  许可证修复完成！", "header")
+        self._log(f"  清除文件: {total_files}", "success")
+        self._log(f"  清除目录: {total_dirs}", "success")
+        self._log(f"  清除注册表: {total_reg}", "success")
+        if total_failed:
+            self._log(f"  失败: {total_failed}", "warning")
+        self._log(f"{'='*50}", "separator")
+        self._log("", "info")
+        self._log(f"  下一步操作:", "header")
+        self._log(f"  1. 重新启动 {software}", "info")
+        self._log(f"  2. {software} 会弹出正常的激活/登录窗口", "info")
+        self._log(f"  3. 输入正确的序列号或使用 Autodesk 账号登录", "info")
+        self._log(f"  4. 完成激活即可正常使用", "info")
+        self._log("", "info")
+
+        self._set_status("许可证修复完成", COLORS["success"])
+        messagebox.showinfo(
+            "许可证修复完成",
+            f"修复已完成！\n\n"
+            f"清除文件: {total_files}\n"
+            f"清除目录: {total_dirs}\n"
+            f"清除注册表: {total_reg}\n\n"
+            f"请重新启动 {software}，\n"
+            f"然后重新输入序列号或登录 Autodesk 账号完成激活。",
+        )
+
+    def _repair_license_full_reset(self):
+        """完全重置所有产品的许可证"""
+        msg = (
+            "⚠️ 完全重置许可证\n\n"
+            "此操作将清除所有 Autodesk 产品的许可证数据，包括：\n\n"
+            "  - 所有 FLEXnet 许可证数据\n"
+            "  - 所有 Adlm 注册数据\n"
+            "  - 所有 Web 登录缓存\n"
+            "  - AdskLicensing 服务数据\n"
+            "  - 许可证相关注册表\n\n"
+            "所有 Autodesk 产品都需要重新激活！\n"
+            "仅在单版本修复无效时使用。\n\n"
+            "确定继续？"
+        )
+        if not messagebox.askyesno("完全重置许可证", msg, icon="warning"):
+            return
+
+        if not messagebox.askyesno(
+            "二次确认",
+            "所有 Autodesk 产品的许可证都将被重置。确定执行？",
+            icon="warning",
+        ):
+            return
+
+        self.is_cleaning = True
+        self._set_status("正在重置许可证...", COLORS["danger"])
+
+        def reset_thread():
+            try:
+                result = repair_license_full_reset()
+                self.root.after(
+                    0, self._log_license_repair_result, "所有产品", result
+                )
+                self.root.after(
+                    0,
+                    lambda: self._set_status("许可证重置完成", COLORS["success"]),
+                )
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "完成",
+                        "许可证已完全重置！\n\n"
+                        "所有 Autodesk 产品需要重新激活。\n"
+                        "启动软件后按提示输入序列号或登录账号。",
+                    ),
+                )
+            except Exception as e:
+                self.root.after(
+                    0, lambda: self._log(f"重置出错: {e}", "error")
+                )
+            finally:
+                self.is_cleaning = False
+
+        threading.Thread(target=reset_thread, daemon=True).start()
 
     def _cleanup_shared(self):
         """清理共享组件"""
