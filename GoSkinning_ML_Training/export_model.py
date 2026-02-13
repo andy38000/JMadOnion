@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-模型导出脚本 - 将 .pth 检查点转换为 .pt TorchScript 模型
+模型导出脚本 - 将 .pth 检查点转换为可部署的模型文件
 
 使用方法:
     py -3.11 export_model.py --checkpoint my_model/checkpoint_epoch_72.pth --output my_model/skinning_model.pt
@@ -19,12 +19,7 @@ from models.skinning_net import SkinningNet, create_skinning_model
 
 def export_model(checkpoint_path: str, output_path: str, model_type: str = 'general'):
     """
-    导出模型为 TorchScript 格式
-    
-    Args:
-        checkpoint_path: .pth 检查点路径
-        output_path: 输出 .pt 文件路径
-        model_type: 模型类型 (general/local/face)
+    导出模型为可部署格式
     """
     print(f"加载检查点: {checkpoint_path}")
     
@@ -47,28 +42,37 @@ def export_model(checkpoint_path: str, output_path: str, model_type: str = 'gene
         epoch = checkpoint.get('epoch', 'unknown')
         print(f"加载的训练轮次: {epoch}")
     else:
-        # 直接是 state_dict
         model.load_state_dict(checkpoint)
     
     model.eval()
     
-    # 创建示例输入
-    example_vertex = torch.randn(1, 1000, 6)
-    example_bone = torch.randn(1, 50, 9)
-    example_dist = torch.randn(1, 1000, 50)
+    # 确保输出目录存在
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     
-    print("正在导出 TorchScript 模型...")
+    # 方法1: 尝试使用 torch.jit.script (比trace更稳定)
+    print("正在导出模型...")
     
-    # 导出为 TorchScript
     try:
-        traced = torch.jit.trace(model, (example_vertex, example_bone, example_dist))
+        # 保存完整模型 (包含结构和权重)
+        # 这种方式更简单可靠
+        save_data = {
+            'model_state_dict': model.state_dict(),
+            'model_type': model_type,
+            'model_config': {
+                'vertex_input_dim': 6,
+                'bone_input_dim': 9,
+                'vertex_hidden_dim': 256 if model_type != 'local' else 128,
+                'bone_hidden_dim': 128 if model_type != 'local' else 64,
+                'fusion_hidden_dim': 256 if model_type != 'local' else 128,
+                'max_influences': 8 if model_type == 'face' else 4,
+                'use_edge_conv': model_type != 'local'
+            }
+        }
         
-        # 确保输出目录存在
-        output_dir = os.path.dirname(output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        torch.save(save_data, output_path)
         
-        traced.save(output_path)
         print(f"✓ 导出成功: {output_path}")
         print(f"✓ 文件大小: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
         return True
@@ -79,12 +83,12 @@ def export_model(checkpoint_path: str, output_path: str, model_type: str = 'gene
 
 
 def main():
-    parser = argparse.ArgumentParser(description='导出蒙皮模型为 TorchScript 格式')
+    parser = argparse.ArgumentParser(description='导出蒙皮模型')
     
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='.pth 检查点文件路径')
     parser.add_argument('--output', type=str, default=None,
-                        help='输出 .pt 文件路径 (默认: 同目录下的 skinning_model.pt)')
+                        help='输出文件路径 (默认: 同目录下的 skinning_model.pt)')
     parser.add_argument('--model_type', type=str, default='general',
                         choices=['general', 'local', 'face'],
                         help='模型类型 (默认: general)')
