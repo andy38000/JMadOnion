@@ -10,11 +10,11 @@ def main():
         from GoSkinning import launch
         launch()
     except ImportError as e:
-        print(f"[GoSkinning] 导入失败: {e}")
-        print("[GoSkinning] 请确保GoSkinning文件夹在Python路径中")
+        print("[GoSkinning] Import failed: " + str(e))
+        print("[GoSkinning] Make sure GoSkinning folder is in Python path")
         raise
     except Exception as e:
-        print(f"[GoSkinning] 启动失败: {e}")
+        print("[GoSkinning] Launch failed: " + str(e))
         raise
 
 

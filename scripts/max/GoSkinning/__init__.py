@@ -25,7 +25,7 @@ def launch():
     try:
         main_window.show()
     except Exception as e:
-        print(f"[GoSkinning] 启动失败: {e}")
+        print("[GoSkinning] Launch failed: " + str(e))
         raise
 
 def version():

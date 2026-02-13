@@ -325,7 +325,7 @@ class GlobalSkinningTab(QWidget):
             self.combo_model.clear()
             self.combo_model.addItems(models)
         except Exception as e:
-            print(f"[UI] Failed to load models: {e}")
+            print("[UI] Failed to load models: " + str(e))
             self.combo_model.clear()
             self.combo_model.addItems(["general-v4.5", "general-v4.0", "local-v3"])
     
