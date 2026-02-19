@@ -5,14 +5,16 @@
 
 	使用方法：
 		1. 在 3ds Max 中打开/导入含有多个蒙皮 Mesh 的 BPED 文件
-		2. 选中需要合并的多个带 Skin 修改器的 Mesh 对象
-		3. 运行此脚本
-	
+		2. 在 3ds Max 中通过 MAXScript > Run Script 运行此脚本
+		3. 在弹出的工具窗口中选择对象并执行合并
+
 	原理：
 		- 先收集所有 Mesh 的骨骼列表和逐顶点权重数据
 		- 移除 Skin 修改器后将所有 Mesh Attach 为一个
 		- 在合并后的 Mesh 上重建 Skin 修改器并恢复所有权重
 */
+
+(
 
 struct VertexWeightData (
 	boneNames = #(),
@@ -21,13 +23,12 @@ struct VertexWeightData (
 
 struct MeshSkinData (
 	meshName = "",
-	meshNode = undefined,
 	vertCount = 0,
 	boneNames = #(),
 	vertexWeights = #()
 )
 
-fn collectSkinData meshObj = (
+fn _msm_collectSkinData meshObj = (
 	local skinMod = undefined
 	for m in meshObj.modifiers where classof m == Skin do (
 		skinMod = m
@@ -40,7 +41,6 @@ fn collectSkinData meshObj = (
 
 	local data = MeshSkinData()
 	data.meshName = meshObj.name
-	data.meshNode = meshObj
 	data.vertCount = skinOps.getNumberVertices skinMod
 
 	local boneCount = skinOps.getNumberBones skinMod
@@ -69,19 +69,18 @@ fn collectSkinData meshObj = (
 	data
 )
 
-fn findBoneByName boneName = (
+fn _msm_findBoneByName boneName = (
 	local boneObj = getNodeByName boneName exact:true
 	if boneObj != undefined then return boneObj
-
 	for obj in objects do (
 		if obj.name == boneName then return obj
 	)
 	undefined
 )
 
-fn mergeSkinMeshes meshNodes = (
+fn _msm_mergeSkinMeshes meshNodes = (
 	if meshNodes.count < 2 do (
-		messageBox "请至少选择两个带 Skin 修改器的 Mesh 对象。" title:"合并蒙皮Mesh"
+		messageBox "请至少选择两个 Mesh 对象。" title:"合并蒙皮Mesh"
 		return undefined
 	)
 
@@ -114,17 +113,15 @@ fn mergeSkinMeshes meshNodes = (
 	format "========== 开始合并蒙皮 Mesh ==========\n"
 	format "共 % 个蒙皮 Mesh 需要合并\n" skinnedMeshes.count
 
-	-- Step 1: 收集所有 Skin 数据
 	format "\n--- Step 1: 收集蒙皮数据 ---\n"
 	local allSkinData = #()
 	for obj in skinnedMeshes do (
 		format "  收集: %  (顶点数: %)\n" obj.name obj.mesh.numverts
-		local sd = collectSkinData obj
+		local sd = _msm_collectSkinData obj
 		if sd != undefined do
 			append allSkinData sd
 	)
 
-	-- 收集所有唯一骨骼名称（保持顺序）
 	local allBoneNames = #()
 	for sd in allSkinData do (
 		for bn in sd.boneNames do (
@@ -134,7 +131,6 @@ fn mergeSkinMeshes meshNodes = (
 	)
 	format "  共涉及 % 根骨骼\n" allBoneNames.count
 
-	-- Step 2: 移除所有 Skin 修改器，并塌陷修改器堆栈
 	format "\n--- Step 2: 移除 Skin 修改器 ---\n"
 	for obj in skinnedMeshes do (
 		local skinModsToRemove = #()
@@ -142,22 +138,17 @@ fn mergeSkinMeshes meshNodes = (
 			append skinModsToRemove m
 		for m in skinModsToRemove do
 			deleteModifier obj m
-		-- 塌陷堆栈以确保 Attach 时几何体干净
-		if obj.modifiers.count > 0 do (
+		if obj.modifiers.count > 0 do
 			maxOps.CollapseNodeTo obj 1 true
-		)
 		convertToMesh obj
 		format "  已处理: %\n" obj.name
 	)
-
 	for obj in nonSkinnedMeshes do (
-		if obj.modifiers.count > 0 do (
+		if obj.modifiers.count > 0 do
 			maxOps.CollapseNodeTo obj 1 true
-		)
 		convertToMesh obj
 	)
 
-	-- Step 3: Attach 所有 Mesh
 	format "\n--- Step 3: Attach 合并 Mesh ---\n"
 	local baseMesh = skinnedMeshes[1]
 	local vertOffsets = #()
@@ -178,7 +169,6 @@ fn mergeSkinMeshes meshNodes = (
 	local totalVerts = baseMesh.mesh.numverts
 	format "  合并后总顶点数: %\n" totalVerts
 
-	-- Step 4: 重建 Skin 修改器
 	format "\n--- Step 4: 重建 Skin 修改器 ---\n"
 	local newSkin = Skin()
 	addModifier baseMesh newSkin
@@ -186,10 +176,9 @@ fn mergeSkinMeshes meshNodes = (
 	max modify mode
 	modPanel.setCurrentObject newSkin
 
-	-- 添加所有骨骼
 	local failedBones = #()
 	for bn in allBoneNames do (
-		local boneObj = findBoneByName bn
+		local boneObj = _msm_findBoneByName bn
 		if boneObj != undefined then (
 			skinOps.addBone newSkin boneObj 0
 			format "  添加骨骼: %\n" bn
@@ -205,30 +194,17 @@ fn mergeSkinMeshes meshNodes = (
 		messageBox warnMsg title:"警告" beep:true
 	)
 
-	-- 刷新以确保骨骼索引可用
 	completeRedraw()
 
-	-- 建立新 Skin 中骨骼名称到索引的映射
 	local newBoneCount = skinOps.getNumberBones newSkin
-	local boneNameToIdx = #()
 	local boneNameKeys = #()
+	local boneNameToIdx = #()
 	for b = 1 to newBoneCount do (
-		local nm = skinOps.getBoneName newSkin b 0
-		append boneNameKeys nm
+		append boneNameKeys (skinOps.getBoneName newSkin b 0)
 		append boneNameToIdx b
 	)
 
-	fn getBoneIdxByName boneNameKeys boneNameToIdx searchName = (
-		local idx = findItem boneNameKeys searchName
-		if idx > 0 then
-			return boneNameToIdx[idx]
-		else
-			return -1
-	)
-
-	-- Step 5: 恢复顶点权重
 	format "\n--- Step 5: 恢复蒙皮权重 ---\n"
-	local vertOffset = 0
 	local processedCount = 0
 
 	for si = 1 to allSkinData.count do (
@@ -244,22 +220,20 @@ fn mergeSkinMeshes meshNodes = (
 				local validBoneIndices = #()
 				local validWeights = #()
 				for b = 1 to vwd.boneNames.count do (
-					local bIdx = getBoneIdxByName boneNameKeys boneNameToIdx vwd.boneNames[b]
-					if bIdx > 0 do (
-						append validBoneIndices bIdx
+					local idx = findItem boneNameKeys vwd.boneNames[b]
+					if idx > 0 do (
+						append validBoneIndices boneNameToIdx[idx]
 						append validWeights vwd.boneWeights[b]
 					)
 				)
 
 				if validBoneIndices.count > 0 do (
-					-- 归一化权重
 					local totalWeight = 0.0
 					for w in validWeights do totalWeight += w
 					if totalWeight > 0.0 and totalWeight != 1.0 do (
 						for wi = 1 to validWeights.count do
 							validWeights[wi] = validWeights[wi] / totalWeight
 					)
-
 					skinOps.ReplaceVertexWeights newSkin globalVertIdx validBoneIndices validWeights
 				)
 			)
@@ -270,7 +244,6 @@ fn mergeSkinMeshes meshNodes = (
 		)
 	)
 
-	-- 处理非蒙皮 Mesh 的顶点（无权重数据，跳过）
 	format "\n========== 合并完成 ==========\n"
 	format "  最终对象: %\n" baseMesh.name
 	format "  总顶点数: %\n" totalVerts
@@ -282,30 +255,137 @@ fn mergeSkinMeshes meshNodes = (
 	baseMesh
 )
 
-fn runMergeSkinMeshes = (
-	if selection.count < 2 do (
-		messageBox "请先选择至少两个需要合并的 Mesh 对象（其中至少一个带有 Skin 修改器）。" title:"合并蒙皮Mesh"
-		return undefined
+-- ==================== UI ====================
+
+try (destroyDialog ::rollMergeSkinMeshes) catch()
+
+rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:320 height:420 (
+
+	group "操作说明" (
+		label lb1 "1. 选中场景中需要合并的多个蒙皮 Mesh" align:#left
+		label lb2 "2. 点击 [刷新列表] 查看选中对象信息" align:#left
+		label lb3 "3. 确认无误后点击 [执行合并]" align:#left
 	)
 
-	local meshNodes = #()
-	for obj in selection do (
-		if superClassOf obj == GeometryClass then
-			append meshNodes obj
-		else
-			format "跳过非几何体对象: % (%)\n" obj.name (classof obj)
+	group "选中对象列表" (
+		dotNetControl lv "System.Windows.Forms.ListView" width:290 height:160
+		button btnRefresh "刷新列表" width:290 height:28
 	)
 
-	if meshNodes.count < 2 do (
-		messageBox "有效的几何体对象不足两个，请重新选择。" title:"合并蒙皮Mesh"
-		return undefined
+	group "信息" (
+		label lbInfo1 "蒙皮 Mesh 数量: 0" align:#left
+		label lbInfo2 "总顶点数: 0" align:#left
+		label lbInfo3 "总骨骼数: 0" align:#left
 	)
 
-	undo "MergeSkinMeshes" on (
-		mergeSkinMeshes meshNodes
+	button btnMerge "执行合并" width:290 height:36 enabled:false
+	button btnSelectSkinned "选中场景中所有蒙皮Mesh" width:290 height:28
+
+	local cachedMeshNodes = #()
+
+	fn initListView = (
+		lv.View = (dotNetClass "System.Windows.Forms.View").Details
+		lv.FullRowSelect = true
+		lv.GridLines = true
+		lv.Columns.Add "对象名称" 130
+		lv.Columns.Add "顶点数" 60
+		lv.Columns.Add "Skin" 50
+		lv.Columns.Add "骨骼数" 50
+	)
+
+	fn refreshList = (
+		lv.Items.Clear()
+		cachedMeshNodes = #()
+		local totalVerts = 0
+		local skinCount = 0
+		local allBones = #()
+
+		for obj in selection where superClassOf obj == GeometryClass do (
+			append cachedMeshNodes obj
+			local item = dotNetObject "System.Windows.Forms.ListViewItem" obj.name
+			local verts = obj.mesh.numverts
+			totalVerts += verts
+			item.SubItems.Add (verts as string)
+
+			local hasSkin = false
+			local boneCount = 0
+			for m in obj.modifiers where classof m == Skin do (
+				hasSkin = true
+				max modify mode
+				modPanel.setCurrentObject m
+				boneCount = skinOps.getNumberBones m
+				for b = 1 to boneCount do (
+					local bn = skinOps.getBoneName m b 0
+					if findItem allBones bn == 0 do append allBones bn
+				)
+				exit
+			)
+
+			if hasSkin then (
+				item.SubItems.Add "是"
+				item.SubItems.Add (boneCount as string)
+				skinCount += 1
+			) else (
+				item.SubItems.Add "否"
+				item.SubItems.Add "-"
+			)
+
+			lv.Items.Add item
+		)
+
+		lbInfo1.text = "蒙皮 Mesh 数量: " + skinCount as string
+		lbInfo2.text = "总顶点数: " + totalVerts as string
+		lbInfo3.text = "总骨骼数 (去重): " + allBones.count as string
+
+		btnMerge.enabled = (cachedMeshNodes.count >= 2 and skinCount >= 1)
+	)
+
+	on rollMergeSkinMeshes open do (
+		initListView()
+		refreshList()
+	)
+
+	on btnRefresh pressed do (
+		refreshList()
+	)
+
+	on btnMerge pressed do (
+		if cachedMeshNodes.count < 2 do (
+			messageBox "至少需要选中两个 Mesh 对象。" title:"提示"
+			return undefined
+		)
+
+		local confirmMsg = "确定要合并 " + cachedMeshNodes.count as string + " 个 Mesh 吗？\n此操作支持撤销 (Ctrl+Z)。"
+		if queryBox confirmMsg title:"确认合并" beep:false do (
+			local result = undefined
+			undo "MergeSkinMeshes" on (
+				result = _msm_mergeSkinMeshes cachedMeshNodes
+			)
+			if result != undefined do (
+				messageBox ("合并完成！\n最终对象: " + result.name + "\n顶点数: " + result.mesh.numverts as string) title:"完成"
+				refreshList()
+			)
+		)
+	)
+
+	on btnSelectSkinned pressed do (
+		local skinnedObjs = #()
+		for obj in geometry do (
+			for m in obj.modifiers where classof m == Skin do (
+				append skinnedObjs obj
+				exit
+			)
+		)
+		if skinnedObjs.count > 0 then (
+			select skinnedObjs
+			format "已选中 % 个蒙皮 Mesh\n" skinnedObjs.count
+			refreshList()
+		) else (
+			messageBox "场景中没有找到带 Skin 修改器的 Mesh。" title:"提示"
+		)
 	)
 )
 
--- 直接运行此脚本时执行；被 UI 脚本 fileIn 引用时跳过
-if (globalVars.get #J_mergeSkinMeshes_asLib) != true then
-	runMergeSkinMeshes()
+createDialog rollMergeSkinMeshes style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
+
+)
