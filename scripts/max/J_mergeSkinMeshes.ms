@@ -384,7 +384,10 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 			if skinType != #none then (
 				local bCount = _msm_getBoneCount obj
 				allBoneCount += bCount
-				item.SubItems.Add (case skinType of (#skin:"Skin"; #physique:"Physique"; default:"?"))
+				local typeStr = "?"
+				if skinType == #skin then typeStr = "Skin"
+				else if skinType == #physique then typeStr = "Physique"
+				item.SubItems.Add typeStr
 				item.SubItems.Add (bCount as string)
 				skinCount += 1
 			) else (
