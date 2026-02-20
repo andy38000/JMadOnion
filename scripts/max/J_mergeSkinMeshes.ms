@@ -10,10 +10,10 @@
 		4. 点击 [执行合并]
 
 	原理：
-		- 在 frame 0 (bind pose) 下 snapshot 各 Mesh，获取正确的世界空间顶点位置
-		- 收集所有骨骼和逐顶点权重数据
-		- 删除原始 Mesh，将 snapshot 副本 Attach 为一个
-		- 在合并后的 Mesh 上重建 Skin 修改器并恢复所有权重
+		- 在 frame 0 (bind pose) 收集所有 Mesh 的骨骼和逐顶点权重
+		- 移除蒙皮修改器, ResetXForm 统一坐标空间
+		- 直接在原始对象上 Attach（保留材质、顶点索引）
+		- 重建 Skin 修改器并恢复所有权重
 
 	支持的蒙皮修改器：Skin、Physique
 */
@@ -206,13 +206,12 @@ fn _msm_mergeSkinMeshes meshNodes = (
 			return undefined
 	)
 
-	-- 记住当前帧，完成后恢复
 	local savedTime = sliderTime
 
 	format "========== 开始合并蒙皮 Mesh ==========\n"
 	format "共 % 个蒙皮 Mesh, % 个非蒙皮 Mesh\n" skinnedMeshes.count nonSkinnedMeshes.count
 
-	-- Step 1: 跳到 frame 0 (bind pose)，收集蒙皮数据
+	-- Step 1: 跳到 frame 0 (bind pose)，逐个 select 并收集蒙皮数据
 	format "\n--- Step 1: 收集蒙皮数据 (frame 0) ---\n"
 	sliderTime = 0
 	completeRedraw()
@@ -234,46 +233,54 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	)
 	format "  共涉及 % 根骨骼\n" allBoneNames.count
 
-	-- Step 2: 在 Skin 仍然激活的状态下 snapshot 每个 Mesh（捕获正确的世界空间位置）
-	--         同时保留材质和贴图信息，然后删除原始对象
-	format "\n--- Step 2: 快照蒙皮 Mesh 并准备合并 ---\n"
-	local snappedMeshes = #()
-
+	-- Step 2: 移除蒙皮修改器, ResetXForm 统一坐标空间
+	--         直接操作原始对象（不用 snapshot），保留材质和顶点索引
+	format "\n--- Step 2: 移除蒙皮修改器 ---\n"
 	for i = 1 to skinnedMeshes.count do (
 		local obj = skinnedMeshes[i]
-		local savedMat = obj.material
-		local snap = snapshot obj
-		snap.name = obj.name
-		snap.wirecolor = obj.wirecolor
-		snap.material = savedMat
-		ResetXForm snap
-		collapseStack snap
-		convertToMesh snap
-		append snappedMeshes snap
-		local matName = if savedMat != undefined then savedMat.name else "<无材质>"
-		format "  快照: %  (顶点数: %, 材质: %)\n" snap.name snap.mesh.numverts matName
+
+		-- 移除所有 Skin / Physique 修改器
+		local modsToRemove = #()
+		for m in obj.modifiers do (
+			if classof m == Skin or classof m == Physique do
+				append modsToRemove m
+		)
+		for m in modsToRemove do
+			deleteModifier obj m
+
+		-- 塌陷其余修改器
+		if obj.modifiers.count > 0 do
+			maxOps.CollapseNodeTo obj 1 true
+
+		-- ResetXForm: 把 node transform + object offset 烘入顶点
+		ResetXForm obj
+		collapseStack obj
+		convertToMesh obj
+
+		-- 验证顶点数匹配
+		local skinVertCount = if i <= allSkinData.count then allSkinData[i].vertCount else 0
+		local meshVertCount = obj.mesh.numverts
+		if skinVertCount > 0 and skinVertCount != meshVertCount do
+			format "  *** 警告: % 顶点数不匹配! Skin记录: %, 实际Mesh: % ***\n" obj.name skinVertCount meshVertCount
+
+		local matName = if obj.material != undefined then obj.material.name else "<无材质>"
+		format "  已处理: %  (顶点数: %, 材质: %)\n" obj.name meshVertCount matName
 	)
 
-	-- 删除原始蒙皮 Mesh
-	for obj in skinnedMeshes do delete obj
-
-	-- 处理非蒙皮 Mesh（保留其材质）
 	for obj in nonSkinnedMeshes do (
 		ResetXForm obj
 		collapseStack obj
 		convertToMesh obj
 	)
 
-	-- Step 3: Attach 合并
+	-- Step 3: Attach 合并（使用原始对象，材质自动合并为 Multi/Sub）
 	format "\n--- Step 3: Attach 合并 Mesh ---\n"
-	local baseMesh = snappedMeshes[1]
+	local baseMesh = skinnedMeshes[1]
 	local vertOffsets = #()
 	append vertOffsets 0
 
 	local currentVertCount = baseMesh.mesh.numverts
-
-	-- 合并所有 snapshot + 非蒙皮 Mesh
-	local allMeshes = for obj in snappedMeshes collect obj
+	local allMeshes = for obj in skinnedMeshes collect obj
 	join allMeshes nonSkinnedMeshes
 
 	for i = 2 to allMeshes.count do (
@@ -287,9 +294,7 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	local totalVerts = baseMesh.mesh.numverts
 	format "  合并后总顶点数: %\n" totalVerts
 
-	-- Step 4: 在 frame 0 下重建 Skin 修改器
-	--         此时骨骼的当前 transform 会被记录为 initial transform
-	--         与 snapshot 捕获的顶点位置一致
+	-- Step 4: 在 frame 0 重建 Skin 修改器
 	format "\n--- Step 4: 重建 Skin 修改器 ---\n"
 	sliderTime = 0
 	select baseMesh
@@ -304,7 +309,6 @@ fn _msm_mergeSkinMeshes meshNodes = (
 		local boneObj = _msm_findBoneByName bn
 		if boneObj != undefined then (
 			skinOps.addBone newSkin boneObj 0
-			format "  添加骨骼: %\n" bn
 		) else (
 			append failedBones bn
 			format "  *** 未找到骨骼: % ***\n" bn
@@ -319,17 +323,24 @@ fn _msm_mergeSkinMeshes meshNodes = (
 
 	completeRedraw()
 
+	-- 建立骨骼名 -> 新Skin中骨骼索引的映射
 	local newBoneCount = skinOps.getNumberBones newSkin
 	local boneNameKeys = #()
-	local boneNameToIdx = #()
-	for b = 1 to newBoneCount do (
+	for b = 1 to newBoneCount do
 		append boneNameKeys (skinOps.getBoneName newSkin b 0)
-		append boneNameToIdx b
-	)
+
+	format "  已添加 % 根骨骼 (目标 %)\n" newBoneCount allBoneNames.count
+
+	-- 打印骨骼映射用于调试
+	format "  骨骼映射验证:\n"
+	for b = 1 to (amin newBoneCount 5) do
+		format "    [%] %\n" b boneNameKeys[b]
+	if newBoneCount > 5 do format "    ... 共 % 根\n" newBoneCount
 
 	-- Step 5: 恢复权重
 	format "\n--- Step 5: 恢复蒙皮权重 ---\n"
 	local processedCount = 0
+	local skippedCount = 0
 
 	for si = 1 to allSkinData.count do (
 		local sd = allSkinData[si]
@@ -340,18 +351,23 @@ fn _msm_mergeSkinMeshes meshNodes = (
 			local vwd = sd.vertexWeights[v]
 			local globalVertIdx = vOff + v
 
+			if globalVertIdx > totalVerts do (
+				format "  *** 顶点索引越界: % > % ***\n" globalVertIdx totalVerts
+				exit
+			)
+
 			if vwd.boneNames.count > 0 do (
 				local validBoneIndices = #()
 				local validWeights = #()
 				for b = 1 to vwd.boneNames.count do (
-					local idx = findItem boneNameKeys vwd.boneNames[b]
-					if idx > 0 do (
-						append validBoneIndices boneNameToIdx[idx]
+					local bIdx = findItem boneNameKeys vwd.boneNames[b]
+					if bIdx > 0 do (
+						append validBoneIndices bIdx
 						append validWeights vwd.boneWeights[b]
 					)
 				)
 
-				if validBoneIndices.count > 0 do (
+				if validBoneIndices.count > 0 then (
 					local totalWeight = 0.0
 					for w in validWeights do totalWeight += w
 					if totalWeight > 0.0 and totalWeight != 1.0 do (
@@ -359,6 +375,8 @@ fn _msm_mergeSkinMeshes meshNodes = (
 							validWeights[wi] = validWeights[wi] / totalWeight
 					)
 					skinOps.ReplaceVertexWeights newSkin globalVertIdx validBoneIndices validWeights
+				) else (
+					skippedCount += 1
 				)
 			)
 
@@ -368,13 +386,15 @@ fn _msm_mergeSkinMeshes meshNodes = (
 		)
 	)
 
-	-- 恢复原始时间帧
 	sliderTime = savedTime
 
 	format "\n========== 合并完成 ==========\n"
 	format "  最终对象: %\n" baseMesh.name
 	format "  总顶点数: %\n" totalVerts
 	format "  骨骼数量: %\n" newBoneCount
+	format "  已处理权重: % 个顶点\n" processedCount
+	if skippedCount > 0 do
+		format "  跳过(无有效骨骼): % 个顶点\n" skippedCount
 	if failedBones.count > 0 do
 		format "  未找到的骨骼: %\n" failedBones.count
 	if baseMesh.material != undefined then (
