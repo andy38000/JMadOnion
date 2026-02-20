@@ -530,10 +530,8 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
         for bi = 1 to bc do
         (
             local bn = skinOps.getBoneName skinMod bi 0
-            -- Common auto-mapping: strip "Bip001 " prefix, replace spaces with underscores
-            local mapped = bn
-            -- Add the original as-is (identity mapping shown for editing)
-            append boneMapping #(bn, mapped)
+            local targetName = bn
+            append boneMapping #(bn, targetName)
         )
 
         refreshMappingGrid()
