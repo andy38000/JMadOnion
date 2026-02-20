@@ -114,6 +114,13 @@ def export_weights(node, filepath):
 
     vertex_count = rt.skinOps.getNumberVertices(skin_mod)
 
+    tmp_mesh = rt.snapshotAsMesh(node)
+    positions = []
+    for vi in range(1, rt.getNumVerts(tmp_mesh) + 1):
+        p = rt.getVert(tmp_mesh, vi)
+        positions.append([round(float(p.x), 6), round(float(p.y), 6), round(float(p.z), 6)])
+    rt.delete(tmp_mesh)
+
     weights_data = []
     for vi in range(1, vertex_count + 1):
         vtx_w = {}
@@ -132,6 +139,7 @@ def export_weights(node, filepath):
         "mesh_name": str(node.name),
         "vertex_count": vertex_count,
         "influences": bones,
+        "positions": positions,
         "weights": weights_data,
     }
 
@@ -141,9 +149,68 @@ def export_weights(node, filepath):
     return vertex_count, bone_count
 
 
-def import_weights(node, filepath, bone_mapping=None):
+def _build_position_map(file_positions, target_positions, tolerance=0.001):
+    """
+    Build a mapping from target vertex index to file vertex index
+    by matching world-space positions. Automatically detects coordinate
+    system differences (Maya Y-up vs Max Z-up).
+
+    Returns dict {target_vtx_idx: file_vtx_idx}.
+    """
+    coord_transforms = [
+        lambda p: (p[0], p[1], p[2]),
+        lambda p: (p[0], p[2], p[1]),
+        lambda p: (p[0], p[2], -p[1]),
+        lambda p: (p[0], -p[2], p[1]),
+    ]
+
+    inv = int(round(1.0 / tolerance))
+    best_map = {}
+    best_count = -1
+
+    for xform in coord_transforms:
+        grid = {}
+        for fi, fp in enumerate(file_positions):
+            tp = xform(fp)
+            key = (round(tp[0] * inv), round(tp[1] * inv), round(tp[2] * inv))
+            grid[key] = fi
+
+        mapping = {}
+        for ti, tp in enumerate(target_positions):
+            key = (round(tp[0] * inv), round(tp[1] * inv), round(tp[2] * inv))
+            if key in grid:
+                mapping[ti] = grid[key]
+                continue
+            found = False
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        nk = (key[0] + dx, key[1] + dy, key[2] + dz)
+                        if nk in grid:
+                            mapping[ti] = grid[nk]
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+
+        if len(mapping) > best_count:
+            best_count = len(mapping)
+            best_map = mapping
+            if best_count == len(target_positions):
+                break
+
+    return best_map
+
+
+def import_weights(node, filepath, bone_mapping=None, match_by_position=False):
     """
     Import skin weights from a JSON file onto a 3ds Max node.
+
+    When *match_by_position* is True and the file contains vertex positions,
+    vertices are matched by world-space position instead of index, solving
+    vertex-reorder issues caused by FBX export/import.
 
     The node must already have a Skin modifier with bones added.
 
@@ -155,6 +222,7 @@ def import_weights(node, filepath, bone_mapping=None):
     weights_data = data["weights"]
     file_influences = list(data["influences"])
     file_vtx_count = data["vertex_count"]
+    file_positions = data.get("positions")
 
     skin_mod = get_skin_modifier(node)
     if skin_mod is None:
@@ -180,6 +248,18 @@ def import_weights(node, filepath, bone_mapping=None):
             for vw in weights_data
         ]
 
+    vtx_map = None
+    if match_by_position and file_positions:
+        tmp_mesh = rt.snapshotAsMesh(node)
+        target_positions = []
+        for vi in range(1, rt.getNumVerts(tmp_mesh) + 1):
+            p = rt.getVert(tmp_mesh, vi)
+            target_positions.append(
+                (round(float(p.x), 6), round(float(p.y), 6), round(float(p.z), 6))
+            )
+        rt.delete(tmp_mesh)
+        vtx_map = _build_position_map(file_positions, target_positions)
+
     max_bone_count = rt.skinOps.getNumberBones(skin_mod)
     bone_name_to_id = {}
     for bi in range(1, max_bone_count + 1):
@@ -192,7 +272,8 @@ def import_weights(node, filepath, bone_mapping=None):
     matched = len(file_influences) - len(missing_bones)
 
     for vi in range(1, vertex_count + 1):
-        vtx_w = weights_data[vi - 1]
+        file_vi = vtx_map[vi - 1] if vtx_map and (vi - 1) in vtx_map else vi - 1
+        vtx_w = weights_data[file_vi]
         if not vtx_w:
             continue
 
@@ -270,6 +351,19 @@ class WeightConverterUI(QtWidgets.QDialog):
         # -- Import --
         grp_imp = QtWidgets.QGroupBox("Import  /  \u5bfc\u5165\u6743\u91cd")
         lay_imp = QtWidgets.QVBoxLayout(grp_imp)
+
+        row_pos = QtWidgets.QHBoxLayout()
+        self.cb_match_pos = QtWidgets.QCheckBox(
+            "\u6309\u9876\u70b9\u4f4d\u7f6e\u5339\u914d  Match by Position"
+        )
+        self.cb_match_pos.setChecked(True)
+        self.cb_match_pos.setToolTip(
+            "Recommended when vertex order differs between Maya and Max.\n"
+            "\u63a8\u8350\uff1a\u89e3\u51b3FBX\u5bfc\u5165\u5bfc\u51fa\u9876\u70b9\u5e8f\u53f7\u91cd\u6392\u95ee\u9898"
+        )
+        row_pos.addWidget(self.cb_match_pos)
+        row_pos.addStretch()
+        lay_imp.addLayout(row_pos)
 
         self.btn_import = QtWidgets.QPushButton(
             "Maya \u2192 Max    \u5bfc\u5165\u6743\u91cd\u6587\u4ef6"
@@ -429,8 +523,12 @@ class WeightConverterUI(QtWidgets.QDialog):
             t0 = time.time()
             self._read_mapping()
             mapping = self.bone_mapping if self.bone_mapping else None
-            self._log("[\u5bfc\u5165] {} <- {}".format(node.name, filepath))
-            vc, matched, missing = import_weights(node, filepath, mapping)
+            match_pos = self.cb_match_pos.isChecked()
+            self._log("[\u5bfc\u5165] {} <- {} (pos_match={})".format(
+                node.name, filepath, match_pos))
+            vc, matched, missing = import_weights(
+                node, filepath, mapping, match_by_position=match_pos
+            )
             elapsed = time.time() - t0
             self._log(
                 "[\u6210\u529f] \u5bfc\u5165\u5b8c\u6210  vtx:{} matched_bones:{}"

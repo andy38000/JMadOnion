@@ -29,6 +29,7 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
 
     group "Import  /  导入权重"
     (
+        checkbox chkMatchPos "按顶点位置匹配 Match by Position" checked:true
         button btnImport "Maya -> Max    导入权重文件" width:440 height:36
     )
 
@@ -171,6 +172,19 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
         )
         format "],\n" to:f
 
+        -- positions
+        local tmpMesh = snapshotAsMesh obj
+        format "  \"positions\": [\n" to:f
+        for vi = 1 to vtxCount do
+        (
+            local p = getVert tmpMesh vi
+            format "    [%, %, %]" (floatToStr p.x digits:6) (floatToStr p.y digits:6) (floatToStr p.z digits:6) to:f
+            if vi < vtxCount then format "," to:f
+            format "\n" to:f
+        )
+        format "  ],\n" to:f
+        delete tmpMesh
+
         -- weights
         format "  \"weights\": [\n" to:f
         for vi = 1 to vtxCount do
@@ -282,7 +296,121 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
             append weightsArray vtxWeights
         )
 
-        #(fileVtxCount, infNames, weightsArray)
+        -- Extract positions (optional)
+        local filePositions = #()
+        local posStart = (dotNetObject "System.Text.RegularExpressions.Regex" \
+            "\"positions\"\\s*:\\s*\\[").Match content
+        if posStart.Success then
+        (
+            local pStartIdx = posStart.Index + posStart.Length
+            local posEnd = (dotNetObject "System.Text.RegularExpressions.Regex" \
+                "\\]\\s*,\\s*\"weights\"").Match content pStartIdx
+            if posEnd.Success then
+            (
+                local posSubLen = posEnd.Index - pStartIdx
+                local posSub = (dotNetObject "System.String" content).Substring pStartIdx posSubLen
+                local coordPattern = "\\[\\s*([0-9eE.+-]+)\\s*,\\s*([0-9eE.+-]+)\\s*,\\s*([0-9eE.+-]+)\\s*\\]"
+                local coordRx = dotNetObject "System.Text.RegularExpressions.Regex" coordPattern
+                local coordMatches = coordRx.Matches posSub
+                for ci = 0 to coordMatches.Count - 1 do
+                (
+                    local cm = coordMatches.Item[ci]
+                    local px = (cm.Groups.Item[1]).Value as float
+                    local py = (cm.Groups.Item[2]).Value as float
+                    local pz = (cm.Groups.Item[3]).Value as float
+                    append filePositions [px, py, pz]
+                )
+            )
+        )
+
+        #(fileVtxCount, infNames, weightsArray, filePositions)
+    )
+
+    fn buildPositionMap filePositions maxPositions tolerance:0.001 =
+    (
+        /*
+            Match vertices by world-space position.
+            Tries multiple coordinate transforms to handle Maya Y-up vs Max Z-up.
+            Returns an array where result[maxVtxIdx] = fileVtxIdx (1-based), or 0 if unmatched.
+        */
+        local inv = (1.0 / tolerance) as integer
+        local bestMap = #()
+        local bestCount = 0
+
+        -- Coordinate transforms: direct, swap-YZ, swap-YZ-negY, swap-YZ-negZ
+        local numTransforms = 4
+
+        for ti = 1 to numTransforms do
+        (
+            local grid = dotNetObject "System.Collections.Generic.Dictionary`2[System.String,System.Int32]"
+            for fi = 1 to filePositions.count do
+            (
+                local fp = filePositions[fi]
+                local tx = 0.0; local ty = 0.0; local tz = 0.0
+                case ti of
+                (
+                    1: ( tx = fp.x; ty = fp.y; tz = fp.z )
+                    2: ( tx = fp.x; ty = fp.z; tz = fp.y )
+                    3: ( tx = fp.x; ty = fp.z; tz = -fp.y )
+                    4: ( tx = fp.x; ty = -fp.z; tz = fp.y )
+                )
+                local key = ((tx * inv) as integer) as string + "," + \
+                            ((ty * inv) as integer) as string + "," + \
+                            ((tz * inv) as integer) as string
+                if not (grid.ContainsKey key) then
+                    grid.Add key fi
+            )
+
+            local thisMap = #()
+            local thisCount = 0
+            for mi = 1 to maxPositions.count do
+            (
+                local mp = maxPositions[mi]
+                local key = ((mp.x * inv) as integer) as string + "," + \
+                            ((mp.y * inv) as integer) as string + "," + \
+                            ((mp.z * inv) as integer) as string
+
+                local foundIdx = 0
+                if grid.ContainsKey key then
+                (
+                    foundIdx = grid.Item[key]
+                )
+                else
+                (
+                    -- Search neighboring cells
+                    local done = false
+                    for dx = -1 to 1 while not done do
+                    (
+                        for dy = -1 to 1 while not done do
+                        (
+                            for dz = -1 to 1 while not done do
+                            (
+                                local nkey = ((mp.x * inv) as integer + dx) as string + "," + \
+                                             ((mp.y * inv) as integer + dy) as string + "," + \
+                                             ((mp.z * inv) as integer + dz) as string
+                                if grid.ContainsKey nkey then
+                                (
+                                    foundIdx = grid.Item[nkey]
+                                    done = true
+                                )
+                            )
+                        )
+                    )
+                )
+                append thisMap foundIdx
+                if foundIdx > 0 then thisCount += 1
+            )
+
+            if thisCount > bestCount then
+            (
+                bestCount = thisCount
+                bestMap = thisMap
+            )
+            if bestCount == maxPositions.count then exit
+        )
+
+        logMsg ("[Position Match] Matched " + bestCount as string + "/" + maxPositions.count as string + " vertices")
+        bestMap
     )
 
     fn importWeights =
@@ -324,6 +452,7 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
         local fileVtxCount = parsed[1]
         local fileInfluences = parsed[2]
         local fileWeights = parsed[3]
+        local filePositions = parsed[4]
 
         local meshVtxCount = skinOps.getNumberVertices skinMod
         if meshVtxCount != fileVtxCount then
@@ -331,6 +460,19 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
             logMsg ("[Error] Vertex count mismatch: mesh=" + (meshVtxCount as string) + \
                 " file=" + (fileVtxCount as string))
             return false
+        )
+
+        -- Position-based vertex mapping
+        local vtxMap = #()
+        if chkMatchPos.checked and filePositions.count > 0 then
+        (
+            logMsg "[Info] Building position map..."
+            local tmpMesh = snapshotAsMesh obj
+            local maxPositions = #()
+            for vi = 1 to tmpMesh.numVerts do
+                append maxPositions (getVert tmpMesh vi)
+            delete tmpMesh
+            vtxMap = buildPositionMap filePositions maxPositions
         )
 
         -- Build bone name -> ID mapping for current Skin modifier
@@ -345,6 +487,7 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
 
         -- Apply bone mapping
         local applyMapping = (boneMapping.count > 0)
+        local useVtxMap = (vtxMap.count == meshVtxCount)
 
         local missingBones = #()
         local matchedCount = 0
@@ -352,7 +495,11 @@ rollout weightConverterRollout "Maya <-> Max Weight Converter  v1.0" width:480 h
         -- Set weights vertex by vertex
         for vi = 1 to meshVtxCount do
         (
-            local vtxW = fileWeights[vi]
+            local fileVi = vi
+            if useVtxMap and vtxMap[vi] > 0 then
+                fileVi = vtxMap[vi]
+
+            local vtxW = fileWeights[fileVi]
             if vtxW.count == 0 then continue
 
             local boneIDs = #()

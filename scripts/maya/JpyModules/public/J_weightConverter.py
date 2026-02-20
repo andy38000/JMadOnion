@@ -135,7 +135,14 @@ def export_weights(mesh, filepath, strip_ns=False):
     sel2 = om2.MSelectionList()
     sel2.add(mesh)
     mesh_dag = sel2.getDagPath(0)
-    vertex_count = om2.MFnMesh(mesh_dag).numVertices
+    mesh_fn = om2.MFnMesh(mesh_dag)
+    vertex_count = mesh_fn.numVertices
+
+    points = mesh_fn.getPoints(om2.MSpace.kWorld)
+    positions = [
+        [round(points[i].x, 6), round(points[i].y, 6), round(points[i].z, 6)]
+        for i in range(vertex_count)
+    ]
 
     comp_fn = om2.MFnSingleIndexedComponent()
     vtx_comp = comp_fn.create(om2.MFn.kMeshVertComponent)
@@ -160,6 +167,7 @@ def export_weights(mesh, filepath, strip_ns=False):
         "skin_cluster": str(skin_cluster),
         "vertex_count": vertex_count,
         "influences": influences,
+        "positions": positions,
         "weights": weights_data,
     }
 
@@ -169,9 +177,68 @@ def export_weights(mesh, filepath, strip_ns=False):
     return vertex_count, len(influences)
 
 
-def import_weights(mesh, filepath, bone_mapping=None):
+def _build_position_map(file_positions, target_positions, tolerance=0.001):
+    """
+    Build a mapping from target vertex index to file vertex index
+    by matching world-space positions. Automatically detects coordinate
+    system differences (Maya Y-up vs Max Z-up).
+
+    Returns dict {target_vtx_idx: file_vtx_idx}.
+    """
+    coord_transforms = [
+        lambda p: (p[0], p[1], p[2]),
+        lambda p: (p[0], p[2], p[1]),
+        lambda p: (p[0], p[2], -p[1]),
+        lambda p: (p[0], -p[2], p[1]),
+    ]
+
+    inv = int(round(1.0 / tolerance))
+    best_map = {}
+    best_count = -1
+
+    for xform in coord_transforms:
+        grid = {}
+        for fi, fp in enumerate(file_positions):
+            tp = xform(fp)
+            key = (round(tp[0] * inv), round(tp[1] * inv), round(tp[2] * inv))
+            grid[key] = fi
+
+        mapping = {}
+        for ti, tp in enumerate(target_positions):
+            key = (round(tp[0] * inv), round(tp[1] * inv), round(tp[2] * inv))
+            if key in grid:
+                mapping[ti] = grid[key]
+                continue
+            found = False
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        nk = (key[0] + dx, key[1] + dy, key[2] + dz)
+                        if nk in grid:
+                            mapping[ti] = grid[nk]
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+
+        if len(mapping) > best_count:
+            best_count = len(mapping)
+            best_map = mapping
+            if best_count == len(target_positions):
+                break
+
+    return best_map
+
+
+def import_weights(mesh, filepath, bone_mapping=None, match_by_position=False):
     """
     Import skin weights from a JSON file onto a Maya mesh.
+
+    When *match_by_position* is True and the file contains vertex positions,
+    vertices are matched by world-space position instead of index, solving
+    vertex-reorder issues caused by FBX export/import.
 
     Returns (vertex_count, matched_influence_count, list_of_missing_influences).
     """
@@ -181,6 +248,7 @@ def import_weights(mesh, filepath, bone_mapping=None):
     weights_data = data["weights"]
     file_influences = list(data["influences"])
     file_vtx_count = data["vertex_count"]
+    file_positions = data.get("positions")
 
     mesh_vtx_count = cmds.polyEvaluate(mesh, vertex=True)
     if mesh_vtx_count != file_vtx_count:
@@ -196,6 +264,20 @@ def import_weights(mesh, filepath, bone_mapping=None):
             {bone_mapping.get(b, b): w for b, w in vw.items()}
             for vw in weights_data
         ]
+
+    # Build position map if requested
+    vtx_map = None
+    if match_by_position and file_positions:
+        sel_m = om2.MSelectionList()
+        sel_m.add(mesh)
+        mesh_dag_m = sel_m.getDagPath(0)
+        mesh_fn_m = om2.MFnMesh(mesh_dag_m)
+        pts = mesh_fn_m.getPoints(om2.MSpace.kWorld)
+        target_positions = [
+            (round(pts[i].x, 6), round(pts[i].y, 6), round(pts[i].z, 6))
+            for i in range(mesh_vtx_count)
+        ]
+        vtx_map = _build_position_map(file_positions, target_positions)
 
     existing_inf = [b for b in file_influences if cmds.objExists(b)]
     missing_inf = sorted(set(b for b in file_influences if not cmds.objExists(b)))
@@ -237,7 +319,8 @@ def import_weights(mesh, filepath, bone_mapping=None):
 
     new_weights = [0.0] * (mesh_vtx_count * num_inf)
     for vi in range(mesh_vtx_count):
-        for bone_name, w in weights_data[vi].items():
+        file_vi = vtx_map[vi] if vtx_map and vi in vtx_map else vi
+        for bone_name, w in weights_data[file_vi].items():
             idx = inf_name_to_idx.get(bone_name)
             if idx is not None:
                 new_weights[vi * num_inf + idx] = w
@@ -340,6 +423,19 @@ class WeightConverterUI(QtWidgets.QDialog):
         # -- Import --
         grp_imp = QtWidgets.QGroupBox("Import  /  \u5bfc\u5165\u6743\u91cd")
         lay_imp = QtWidgets.QVBoxLayout(grp_imp)
+
+        row_pos = QtWidgets.QHBoxLayout()
+        self.cb_match_pos = QtWidgets.QCheckBox(
+            "\u6309\u9876\u70b9\u4f4d\u7f6e\u5339\u914d  Match by Position"
+        )
+        self.cb_match_pos.setChecked(True)
+        self.cb_match_pos.setToolTip(
+            "Recommended when vertex order differs between Maya and Max.\n"
+            "\u63a8\u8350\uff1a\u89e3\u51b3FBX\u5bfc\u5165\u5bfc\u51fa\u9876\u70b9\u5e8f\u53f7\u91cd\u6392\u95ee\u9898"
+        )
+        row_pos.addWidget(self.cb_match_pos)
+        row_pos.addStretch()
+        lay_imp.addLayout(row_pos)
 
         self.btn_import = QtWidgets.QPushButton(
             "Max \u2192 Maya    \u5bfc\u5165\u6743\u91cd\u6587\u4ef6"
@@ -541,8 +637,12 @@ class WeightConverterUI(QtWidgets.QDialog):
             t0 = time.time()
             self._read_mapping_from_table()
             mapping = self.bone_mapping if self.bone_mapping else None
-            self._log("[\u5bfc\u5165] {} <- {}".format(mesh, filepath))
-            vc, matched, missing = import_weights(mesh, filepath, mapping)
+            match_pos = self.cb_match_pos.isChecked()
+            self._log("[\u5bfc\u5165] {} <- {} (pos_match={})".format(
+                mesh, filepath, match_pos))
+            vc, matched, missing = import_weights(
+                mesh, filepath, mapping, match_by_position=match_pos
+            )
             elapsed = time.time() - t0
             self._log(
                 "[\u6210\u529f] \u5bfc\u5165\u5b8c\u6210  vtx:{} matched_bones:{}"
