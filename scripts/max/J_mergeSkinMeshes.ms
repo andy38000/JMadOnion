@@ -235,27 +235,29 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	format "  共涉及 % 根骨骼\n" allBoneNames.count
 
 	-- Step 2: 在 Skin 仍然激活的状态下 snapshot 每个 Mesh（捕获正确的世界空间位置）
-	--         然后删除原始对象
+	--         同时保留材质和贴图信息，然后删除原始对象
 	format "\n--- Step 2: 快照蒙皮 Mesh 并准备合并 ---\n"
 	local snappedMeshes = #()
 
 	for i = 1 to skinnedMeshes.count do (
 		local obj = skinnedMeshes[i]
+		local savedMat = obj.material
 		local snap = snapshot obj
 		snap.name = obj.name
 		snap.wirecolor = obj.wirecolor
-		-- 把 node transform 烘入顶点，确保在统一的世界坐标系
+		snap.material = savedMat
 		ResetXForm snap
 		collapseStack snap
 		convertToMesh snap
 		append snappedMeshes snap
-		format "  快照: %  (顶点数: %)\n" snap.name snap.mesh.numverts
+		local matName = if savedMat != undefined then savedMat.name else "<无材质>"
+		format "  快照: %  (顶点数: %, 材质: %)\n" snap.name snap.mesh.numverts matName
 	)
 
 	-- 删除原始蒙皮 Mesh
 	for obj in skinnedMeshes do delete obj
 
-	-- 处理非蒙皮 Mesh
+	-- 处理非蒙皮 Mesh（保留其材质）
 	for obj in nonSkinnedMeshes do (
 		ResetXForm obj
 		collapseStack obj
@@ -277,7 +279,7 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	for i = 2 to allMeshes.count do (
 		append vertOffsets currentVertCount
 		local addCount = allMeshes[i].mesh.numverts
-		meshop.attach baseMesh allMeshes[i]
+		meshop.attach baseMesh allMeshes[i] condenseMat:true
 		currentVertCount += addCount
 		format "  Attach #%: 顶点偏移 %, 新增 %\n" i vertOffsets[i] addCount
 	)
@@ -375,6 +377,14 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	format "  骨骼数量: %\n" newBoneCount
 	if failedBones.count > 0 do
 		format "  未找到的骨骼: %\n" failedBones.count
+	if baseMesh.material != undefined then (
+		local matClass = classof baseMesh.material
+		format "  材质类型: %\n" matClass
+		if matClass == Multimaterial do
+			format "  子材质数: %\n" baseMesh.material.numsubs
+	) else (
+		format "  材质: 无\n"
+	)
 
 	select baseMesh
 	baseMesh
