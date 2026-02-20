@@ -10,8 +10,9 @@
 		4. 点击 [执行合并]
 
 	原理：
-		- 先收集所有 Mesh 的骨骼列表和逐顶点权重数据
-		- 移除蒙皮修改器后将所有 Mesh Attach 为一个
+		- 在 frame 0 (bind pose) 下 snapshot 各 Mesh，获取正确的世界空间顶点位置
+		- 收集所有骨骼和逐顶点权重数据
+		- 删除原始 Mesh，将 snapshot 副本 Attach 为一个
 		- 在合并后的 Mesh 上重建 Skin 修改器并恢复所有权重
 
 	支持的蒙皮修改器：Skin、Physique
@@ -31,7 +32,6 @@ struct MeshSkinData (
 	vertexWeights = #()
 )
 
--- 检测对象上的蒙皮修改器类型，返回 #skin / #physique / #none
 fn _msm_getSkinType obj = (
 	for m in obj.modifiers do (
 		if classof m == Skin then return #skin
@@ -40,7 +40,6 @@ fn _msm_getSkinType obj = (
 	#none
 )
 
--- 获取对象上的蒙皮修改器实例
 fn _msm_getSkinMod obj = (
 	for m in obj.modifiers do (
 		if classof m == Skin then return m
@@ -49,7 +48,6 @@ fn _msm_getSkinMod obj = (
 	undefined
 )
 
--- 读取 Skin 修改器权重数据（调用前必须已 select obj）
 fn _msm_collectFromSkin meshObj skinMod = (
 	max modify mode
 	select meshObj
@@ -84,7 +82,6 @@ fn _msm_collectFromSkin meshObj skinMod = (
 	data
 )
 
--- 读取 Physique 修改器权重数据
 fn _msm_collectFromPhysique meshObj physMod = (
 	max modify mode
 	select meshObj
@@ -123,7 +120,6 @@ fn _msm_collectFromPhysique meshObj physMod = (
 	data
 )
 
--- 统一入口：根据修改器类型收集蒙皮数据
 fn _msm_collectSkinData meshObj = (
 	local skinType = _msm_getSkinType meshObj
 	if skinType == #none then return undefined
@@ -147,7 +143,6 @@ fn _msm_findBoneByName boneName = (
 	undefined
 )
 
--- 获取对象的 Skin 骨骼数（需要 select + modPanel 才能正确读取）
 fn _msm_getBoneCount obj = (
 	local skinType = _msm_getSkinType obj
 	if skinType == #none then return 0
@@ -211,11 +206,17 @@ fn _msm_mergeSkinMeshes meshNodes = (
 			return undefined
 	)
 
-	format "========== 开始合并蒙皮 Mesh ==========\n"
-	format "共 % 个蒙皮 Mesh 需要合并\n" skinnedMeshes.count
+	-- 记住当前帧，完成后恢复
+	local savedTime = sliderTime
 
-	-- Step 1: 逐个 select 并收集蒙皮数据
-	format "\n--- Step 1: 收集蒙皮数据 ---\n"
+	format "========== 开始合并蒙皮 Mesh ==========\n"
+	format "共 % 个蒙皮 Mesh, % 个非蒙皮 Mesh\n" skinnedMeshes.count nonSkinnedMeshes.count
+
+	-- Step 1: 跳到 frame 0 (bind pose)，收集蒙皮数据
+	format "\n--- Step 1: 收集蒙皮数据 (frame 0) ---\n"
+	sliderTime = 0
+	completeRedraw()
+
 	local allSkinData = #()
 	for obj in skinnedMeshes do (
 		format "  收集: %  (类型: %, 顶点数: %)\n" obj.name (_msm_getSkinType obj) obj.mesh.numverts
@@ -233,35 +234,44 @@ fn _msm_mergeSkinMeshes meshNodes = (
 	)
 	format "  共涉及 % 根骨骼\n" allBoneNames.count
 
-	-- Step 2: 移除所有蒙皮修改器
-	format "\n--- Step 2: 移除蒙皮修改器 ---\n"
-	for obj in skinnedMeshes do (
-		local modsToRemove = #()
-		for m in obj.modifiers do (
-			if classof m == Skin or classof m == Physique do
-				append modsToRemove m
-		)
-		for m in modsToRemove do
-			deleteModifier obj m
-		if obj.modifiers.count > 0 do
-			maxOps.CollapseNodeTo obj 1 true
-		convertToMesh obj
-		format "  已处理: %\n" obj.name
+	-- Step 2: 在 Skin 仍然激活的状态下 snapshot 每个 Mesh（捕获正确的世界空间位置）
+	--         然后删除原始对象
+	format "\n--- Step 2: 快照蒙皮 Mesh 并准备合并 ---\n"
+	local snappedMeshes = #()
+
+	for i = 1 to skinnedMeshes.count do (
+		local obj = skinnedMeshes[i]
+		local snap = snapshot obj
+		snap.name = obj.name
+		snap.wirecolor = obj.wirecolor
+		-- 把 node transform 烘入顶点，确保在统一的世界坐标系
+		ResetXForm snap
+		collapseStack snap
+		convertToMesh snap
+		append snappedMeshes snap
+		format "  快照: %  (顶点数: %)\n" snap.name snap.mesh.numverts
 	)
+
+	-- 删除原始蒙皮 Mesh
+	for obj in skinnedMeshes do delete obj
+
+	-- 处理非蒙皮 Mesh
 	for obj in nonSkinnedMeshes do (
-		if obj.modifiers.count > 0 do
-			maxOps.CollapseNodeTo obj 1 true
+		ResetXForm obj
+		collapseStack obj
 		convertToMesh obj
 	)
 
 	-- Step 3: Attach 合并
 	format "\n--- Step 3: Attach 合并 Mesh ---\n"
-	local baseMesh = skinnedMeshes[1]
+	local baseMesh = snappedMeshes[1]
 	local vertOffsets = #()
 	append vertOffsets 0
 
 	local currentVertCount = baseMesh.mesh.numverts
-	local allMeshes = for obj in skinnedMeshes collect obj
+
+	-- 合并所有 snapshot + 非蒙皮 Mesh
+	local allMeshes = for obj in snappedMeshes collect obj
 	join allMeshes nonSkinnedMeshes
 
 	for i = 2 to allMeshes.count do (
@@ -269,14 +279,17 @@ fn _msm_mergeSkinMeshes meshNodes = (
 		local addCount = allMeshes[i].mesh.numverts
 		meshop.attach baseMesh allMeshes[i]
 		currentVertCount += addCount
-		format "  Attach: 偏移 %, 新增顶点 %\n" vertOffsets[i] addCount
+		format "  Attach #%: 顶点偏移 %, 新增 %\n" i vertOffsets[i] addCount
 	)
 
 	local totalVerts = baseMesh.mesh.numverts
 	format "  合并后总顶点数: %\n" totalVerts
 
-	-- Step 4: 重建 Skin 修改器
+	-- Step 4: 在 frame 0 下重建 Skin 修改器
+	--         此时骨骼的当前 transform 会被记录为 initial transform
+	--         与 snapshot 捕获的顶点位置一致
 	format "\n--- Step 4: 重建 Skin 修改器 ---\n"
+	sliderTime = 0
 	select baseMesh
 	local newSkin = Skin()
 	addModifier baseMesh newSkin
@@ -353,6 +366,9 @@ fn _msm_mergeSkinMeshes meshNodes = (
 		)
 	)
 
+	-- 恢复原始时间帧
+	sliderTime = savedTime
+
 	format "\n========== 合并完成 ==========\n"
 	format "  最终对象: %\n" baseMesh.name
 	format "  总顶点数: %\n" totalVerts
@@ -407,9 +423,8 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 		cachedMeshNodes = #()
 		local totalVerts = 0
 		local skinCount = 0
-		local allBones = #()
+		local allBoneCount = 0
 
-		-- 快照当前选择到数组，避免迭代时被 select 干扰
 		local selArray = for obj in selection where superClassOf obj == GeometryClass collect obj
 
 		for obj in selArray do (
@@ -422,6 +437,7 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 			local skinType = _msm_getSkinType obj
 			if skinType != #none then (
 				local bCount = _msm_getBoneCount obj
+				allBoneCount += bCount
 				local typeStr = case skinType of (
 					#skin:     "Skin"
 					#physique: "Physique"
@@ -438,12 +454,11 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 			lv.Items.Add item
 		)
 
-		-- 恢复原始多选
 		if selArray.count > 0 do select selArray
 
 		lbInfo1.text = "蒙皮 Mesh 数量: " + skinCount as string
 		lbInfo2.text = "总顶点数: " + totalVerts as string
-		lbInfo3.text = "总骨骼数: " + allBones.count as string
+		lbInfo3.text = "总骨骼数: " + allBoneCount as string
 
 		btnMerge.enabled = (cachedMeshNodes.count >= 2 and skinCount >= 1)
 	)
