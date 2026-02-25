@@ -136,6 +136,80 @@ def _listdir_unicode(path):
     return result
 
 
+def _mirror_control_name(ctrl_name, mirror_settings):
+    """Mirror control name by swapping L/R prefixes and suffixes"""
+    left_prefix = mirror_settings.get('left_prefix', 'L_')
+    right_prefix = mirror_settings.get('right_prefix', 'R_')
+    left_suffix = mirror_settings.get('left_suffix', '_L')
+    right_suffix = mirror_settings.get('right_suffix', '_R')
+    
+    # Get the base name (without namespace or path)
+    if '|' in ctrl_name:
+        parts = ctrl_name.split('|')
+        base = parts[-1]
+        prefix_path = '|'.join(parts[:-1]) + '|' if len(parts) > 1 else ''
+    else:
+        base = ctrl_name
+        prefix_path = ''
+    
+    # Handle namespace
+    ns = ''
+    if ':' in base:
+        ns, base = base.rsplit(':', 1)
+        ns += ':'
+    
+    new_base = base
+    
+    # Swap prefixes
+    if left_prefix and base.startswith(left_prefix):
+        new_base = right_prefix + base[len(left_prefix):]
+    elif right_prefix and base.startswith(right_prefix):
+        new_base = left_prefix + base[len(right_prefix):]
+    # Swap suffixes
+    elif left_suffix and base.endswith(left_suffix):
+        new_base = base[:-len(left_suffix)] + right_suffix
+    elif right_suffix and base.endswith(right_suffix):
+        new_base = base[:-len(right_suffix)] + left_suffix
+    
+    return prefix_path + ns + new_base
+
+
+def _mirror_attr_value(attr_name, value, mirror_values=True):
+    """Mirror attribute value based on attribute type"""
+    if not mirror_values:
+        return value
+    
+    attr_lower = attr_name.lower()
+    
+    # Attributes that should be negated for mirroring
+    negate_attrs = ['translatex', 'tx', 'rotatey', 'ry', 'rotatez', 'rz']
+    
+    if attr_lower in negate_attrs:
+        if isinstance(value, (int, float)):
+            return -value
+        elif isinstance(value, list):
+            return [-v if isinstance(v, (int, float)) else v for v in value]
+    
+    return value
+
+
+def _scale_keyframe_times(keyframes, scale, start_time, current_time):
+    """Scale keyframe times by a factor"""
+    if scale == 1.0:
+        return keyframes
+    
+    scaled = []
+    for i in range(0, len(keyframes), 2):
+        if i + 1 < len(keyframes):
+            time = keyframes[i]
+            value = keyframes[i + 1]
+            # Scale time relative to start
+            scaled_time = current_time + (time - start_time) / scale
+            scaled.append(scaled_time)
+            scaled.append(value)
+    return scaled
+
+
 def maya_main_window():
     main_window_ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(_long_ptr(main_window_ptr), QtWidgets.QWidget)
@@ -461,6 +535,258 @@ class NamespaceMappingDialog(QtWidgets.QDialog):
         return self.save_mapping_checkbox.isChecked()
 
 
+class AnimationLoadOptionsDialog(QtWidgets.QDialog):
+    """Dialog for animation loading options including mirror and time scale"""
+    def __init__(self, source_namespaces, anim_info=None, parent=None):
+        super(AnimationLoadOptionsDialog, self).__init__(parent)
+        self.setWindowTitle("Animation Load Options")
+        self.setMinimumSize(650, 550)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1C262D;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                font-size: 13px;
+            }
+            QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+                background-color: #263238;
+                color: white;
+                padding: 5px;
+                border: 1px solid #455A64;
+                border-radius: 3px;
+                min-height: 25px;
+            }
+            QCheckBox {
+                color: white;
+                font-size: 13px;
+            }
+            QGroupBox {
+                font-size: 14px;
+                font-weight: bold;
+                color: #4FC3F7;
+                border: 1px solid #455A64;
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QPushButton {
+                background-color: #4FC3F7;
+                color: #263238;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 10px 15px;
+                border: none;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #81D4FA;
+            }
+        """)
+        
+        self.scene_namespaces = self.get_scene_namespaces()
+        self.anim_info = anim_info or {}
+        self.setup_ui(source_namespaces)
+        
+    def get_scene_namespaces(self):
+        namespaces = cmds.namespaceInfo(listOnlyNamespaces=True, recurse=True)
+        return ['root'] + (namespaces or [])
+    
+    def setup_ui(self, source_namespaces):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(10)
+        
+        # === Namespace Mapping Section ===
+        ns_group = QtWidgets.QGroupBox("Namespace Mapping")
+        ns_layout = QtWidgets.QVBoxLayout(ns_group)
+        
+        scroll_widget = QtWidgets.QWidget()
+        scroll_layout = QtWidgets.QVBoxLayout(scroll_widget)
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(scroll_widget)
+        scroll_area.setMaximumHeight(120)
+        
+        self.mapping_rows = {}
+        for source_ns in sorted(set(source_namespaces)):
+            source_label = "No Namespace (root)" if not source_ns else source_ns
+            row = QtWidgets.QHBoxLayout()
+            row.addWidget(QtWidgets.QLabel(source_label))
+            row.addWidget(QtWidgets.QLabel("→"))
+            target_combo = QtWidgets.QComboBox()
+            target_combo.addItems(self.scene_namespaces)
+            
+            matching_idx = 0
+            if source_ns == "":
+                matching_idx = self.scene_namespaces.index("root") if "root" in self.scene_namespaces else 0
+            elif source_ns in self.scene_namespaces:
+                matching_idx = self.scene_namespaces.index(source_ns)
+            target_combo.setCurrentIndex(matching_idx)
+            row.addWidget(target_combo, 1)
+            scroll_layout.addLayout(row)
+            self.mapping_rows[source_ns] = target_combo
+        
+        ns_layout.addWidget(scroll_area)
+        layout.addWidget(ns_group)
+        
+        # === Mirror Options Section ===
+        mirror_group = QtWidgets.QGroupBox("Mirror Options")
+        mirror_layout = QtWidgets.QVBoxLayout(mirror_group)
+        
+        self.mirror_checkbox = QtWidgets.QCheckBox("Enable Mirror (Left ↔ Right)")
+        mirror_layout.addWidget(self.mirror_checkbox)
+        
+        prefix_layout = QtWidgets.QHBoxLayout()
+        prefix_layout.addWidget(QtWidgets.QLabel("Left Prefix:"))
+        self.left_prefix = QtWidgets.QLineEdit("L_")
+        self.left_prefix.setMaximumWidth(80)
+        prefix_layout.addWidget(self.left_prefix)
+        prefix_layout.addWidget(QtWidgets.QLabel("Right Prefix:"))
+        self.right_prefix = QtWidgets.QLineEdit("R_")
+        self.right_prefix.setMaximumWidth(80)
+        prefix_layout.addWidget(self.right_prefix)
+        prefix_layout.addStretch()
+        mirror_layout.addLayout(prefix_layout)
+        
+        suffix_layout = QtWidgets.QHBoxLayout()
+        suffix_layout.addWidget(QtWidgets.QLabel("Left Suffix:"))
+        self.left_suffix = QtWidgets.QLineEdit("_L")
+        self.left_suffix.setMaximumWidth(80)
+        suffix_layout.addWidget(self.left_suffix)
+        suffix_layout.addWidget(QtWidgets.QLabel("Right Suffix:"))
+        self.right_suffix = QtWidgets.QLineEdit("_R")
+        self.right_suffix.setMaximumWidth(80)
+        suffix_layout.addWidget(self.right_suffix)
+        suffix_layout.addStretch()
+        mirror_layout.addLayout(suffix_layout)
+        
+        self.mirror_values_checkbox = QtWidgets.QCheckBox("Mirror Values (Negate TranslateX, RotateY, RotateZ)")
+        self.mirror_values_checkbox.setChecked(True)
+        mirror_layout.addWidget(self.mirror_values_checkbox)
+        
+        layout.addWidget(mirror_group)
+        
+        # === Time Scale Section ===
+        time_group = QtWidgets.QGroupBox("Time Scale")
+        time_layout = QtWidgets.QVBoxLayout(time_group)
+        
+        scale_layout = QtWidgets.QHBoxLayout()
+        scale_layout.addWidget(QtWidgets.QLabel("Speed Multiplier:"))
+        self.time_scale_spin = QtWidgets.QDoubleSpinBox()
+        self.time_scale_spin.setRange(0.1, 10.0)
+        self.time_scale_spin.setValue(1.0)
+        self.time_scale_spin.setSingleStep(0.1)
+        self.time_scale_spin.setDecimals(2)
+        scale_layout.addWidget(self.time_scale_spin)
+        
+        # Quick presets
+        self.half_speed_btn = QtWidgets.QPushButton("0.5x")
+        self.half_speed_btn.setMaximumWidth(50)
+        self.half_speed_btn.clicked.connect(lambda: self.time_scale_spin.setValue(0.5))
+        self.normal_speed_btn = QtWidgets.QPushButton("1x")
+        self.normal_speed_btn.setMaximumWidth(50)
+        self.normal_speed_btn.clicked.connect(lambda: self.time_scale_spin.setValue(1.0))
+        self.double_speed_btn = QtWidgets.QPushButton("2x")
+        self.double_speed_btn.setMaximumWidth(50)
+        self.double_speed_btn.clicked.connect(lambda: self.time_scale_spin.setValue(2.0))
+        scale_layout.addWidget(self.half_speed_btn)
+        scale_layout.addWidget(self.normal_speed_btn)
+        scale_layout.addWidget(self.double_speed_btn)
+        scale_layout.addStretch()
+        time_layout.addLayout(scale_layout)
+        
+        # Show duration info
+        if self.anim_info:
+            duration = self.anim_info.get('duration', 0)
+            frames = self.anim_info.get('frame_count', 0)
+            info_label = QtWidgets.QLabel("Original: {} frames, {:.2f} sec".format(frames, duration))
+            info_label.setStyleSheet("color: #B0BEC5; font-style: italic;")
+            time_layout.addWidget(info_label)
+        
+        layout.addWidget(time_group)
+        
+        # === Load Mode Section ===
+        mode_group = QtWidgets.QGroupBox("Load Mode")
+        mode_layout = QtWidgets.QHBoxLayout(mode_group)
+        
+        self.mode_replace = QtWidgets.QRadioButton("Replace")
+        self.mode_replace.setChecked(True)
+        self.mode_insert = QtWidgets.QRadioButton("Insert (Add to existing)")
+        self.mode_blend = QtWidgets.QRadioButton("Blend")
+        
+        mode_layout.addWidget(self.mode_replace)
+        mode_layout.addWidget(self.mode_insert)
+        mode_layout.addWidget(self.mode_blend)
+        mode_layout.addStretch()
+        
+        self.blend_weight_spin = QtWidgets.QDoubleSpinBox()
+        self.blend_weight_spin.setRange(0.0, 1.0)
+        self.blend_weight_spin.setValue(0.5)
+        self.blend_weight_spin.setSingleStep(0.1)
+        self.blend_weight_spin.setEnabled(False)
+        mode_layout.addWidget(QtWidgets.QLabel("Blend:"))
+        mode_layout.addWidget(self.blend_weight_spin)
+        
+        self.mode_blend.toggled.connect(self.blend_weight_spin.setEnabled)
+        
+        layout.addWidget(mode_group)
+        
+        # === Buttons ===
+        button_layout = QtWidgets.QHBoxLayout()
+        self.apply_button = QtWidgets.QPushButton("Load Animation")
+        self.cancel_button = QtWidgets.QPushButton("Cancel")
+        self.cancel_button.setStyleSheet("background-color: #455A64; color: white;")
+        
+        button_layout.addStretch()
+        button_layout.addWidget(self.apply_button)
+        button_layout.addWidget(self.cancel_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.apply_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+    
+    def get_mapping(self):
+        mapping = {}
+        for source_ns, target_combo in self.mapping_rows.items():
+            target_ns = target_combo.currentText()
+            if target_ns == "root":
+                target_ns = ""
+            mapping[source_ns] = target_ns
+        return mapping
+    
+    def get_mirror_settings(self):
+        return {
+            'enabled': self.mirror_checkbox.isChecked(),
+            'left_prefix': self.left_prefix.text(),
+            'right_prefix': self.right_prefix.text(),
+            'left_suffix': self.left_suffix.text(),
+            'right_suffix': self.right_suffix.text(),
+            'mirror_values': self.mirror_values_checkbox.isChecked()
+        }
+    
+    def get_time_scale(self):
+        return self.time_scale_spin.value()
+    
+    def get_load_mode(self):
+        if self.mode_replace.isChecked():
+            return 'replace'
+        elif self.mode_insert.isChecked():
+            return 'insert'
+        else:
+            return 'blend'
+    
+    def get_blend_weight(self):
+        return self.blend_weight_spin.value()
+
+
 class CharacterSelectorDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super(CharacterSelectorDialog, self).__init__(parent)
@@ -588,6 +914,10 @@ class AnimationDataUI(QtWidgets.QDialog):
         
         # Add namespace mapping storage
         self.namespace_mappings = self.load_namespace_mappings()
+        
+        # Favorites and recent lists
+        self.favorites = self.load_favorites()
+        self.recent_list = self.load_recent()
         
         self.setup_ui()
         self.load_animation_panel()
@@ -901,6 +1231,167 @@ class AnimationDataUI(QtWidgets.QDialog):
         settings.setValue("namespace_mappings", mappings)
         self.namespace_mappings = mappings
 
+    def load_favorites(self):
+        """Load favorites list from settings"""
+        settings = QtCore.QSettings("Pitaya37", "AnimationDataTool")
+        favorites = settings.value("favorites", [])
+        return favorites if isinstance(favorites, list) else []
+    
+    def save_favorites(self):
+        """Save favorites list to settings"""
+        settings = QtCore.QSettings("Pitaya37", "AnimationDataTool")
+        settings.setValue("favorites", self.favorites)
+    
+    def add_to_favorites(self, group_name, anim_name):
+        """Add animation to favorites"""
+        key = "{}/{}".format(group_name, anim_name)
+        if key not in self.favorites:
+            self.favorites.append(key)
+            self.save_favorites()
+            self.status_label.setText("Added to favorites: {}".format(key))
+            self.load_animation_panel()  # Refresh to show star
+    
+    def remove_from_favorites(self, group_name, anim_name):
+        """Remove animation from favorites"""
+        key = "{}/{}".format(group_name, anim_name)
+        if key in self.favorites:
+            self.favorites.remove(key)
+            self.save_favorites()
+            self.status_label.setText("Removed from favorites: {}".format(key))
+            self.load_animation_panel()
+    
+    def is_favorite(self, group_name, anim_name):
+        """Check if animation is in favorites"""
+        key = "{}/{}".format(group_name, anim_name)
+        return key in self.favorites
+    
+    def load_recent(self):
+        """Load recent list from settings"""
+        settings = QtCore.QSettings("Pitaya37", "AnimationDataTool")
+        recent = settings.value("recent_list", [])
+        return recent if isinstance(recent, list) else []
+    
+    def save_recent(self):
+        """Save recent list to settings"""
+        settings = QtCore.QSettings("Pitaya37", "AnimationDataTool")
+        settings.setValue("recent_list", self.recent_list)
+    
+    def add_to_recent(self, group_name, anim_name):
+        """Add animation to recent list"""
+        key = "{}/{}".format(group_name, anim_name)
+        # Remove if already exists (to move to front)
+        if key in self.recent_list:
+            self.recent_list.remove(key)
+        # Add to front
+        self.recent_list.insert(0, key)
+        # Keep only last 20
+        self.recent_list = self.recent_list[:20]
+        self.save_recent()
+
+    def _create_special_tab(self, tab_name, items_list):
+        """Create a special tab (Favorites or Recent) with animation thumbnails"""
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        
+        container_widget = QtWidgets.QWidget()
+        scroll_area.setWidget(container_widget)
+        
+        layout = QtWidgets.QGridLayout(container_widget)
+        layout.setSpacing(15)
+        layout.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        
+        self.tab_widget.addTab(scroll_area, tab_name)
+        self.group_boxes[tab_name] = layout
+        
+        count = 0
+        for item in items_list:
+            if "/" not in item:
+                continue
+            group_name, anim_name = item.split("/", 1)
+            anim_path = os.path.join(self.file_path, group_name, anim_name)
+            
+            if not os.path.isdir(anim_path):
+                continue
+            
+            # Get is_pose flag
+            is_pose = False
+            anim_file = os.path.join(anim_path, "animation_data.json")
+            if os.path.exists(anim_file):
+                try:
+                    data = _read_json(anim_file)
+                    is_pose = data.get("is_pose", False)
+                except:
+                    pass
+            
+            preview_dir = os.path.join(anim_path, "{}_preview".format(anim_name))
+            if not os.path.exists(preview_dir):
+                continue
+            
+            image_files = sorted([
+                os.path.join(preview_dir, f) 
+                for f in _listdir_unicode(preview_dir) 
+                if f.endswith(('.jpg', '.png')) and f.startswith('frame_')
+            ])
+            
+            if image_files:
+                self._create_special_thumbnail(layout, count, group_name, anim_name, image_files, is_pose)
+                count += 1
+
+    def _create_special_thumbnail(self, layout, index, group_name, anim_name, image_sequence, is_pose):
+        """Create thumbnail for special tabs (Favorites/Recent)"""
+        video_widget = AnimationPreviewWidget(self)
+        video_widget.setFixedSize(self.thumbnail_size, self.thumbnail_size * 3 // 4)
+        video_widget.set_image_sequence(image_sequence, fps=24, is_pose=is_pose)
+        
+        video_widget.anim_name = anim_name
+        video_widget.group_name = group_name
+        video_widget.preview_path = image_sequence[0]
+        video_widget.is_pose = is_pose
+        
+        video_widget.left_clicked.connect(self.show_preview)
+        video_widget.left_clicked.connect(self.fill_name_fields_from_thumbnail)
+        video_widget.right_clicked.connect(self.show_context_menu)
+        
+        is_fav = self.is_favorite(group_name, anim_name)
+        display_name = u"{}/{}".format(group_name, anim_name)
+        if is_fav:
+            display_name = u"\u2605 " + display_name
+        
+        name_label = QtWidgets.QLabel(display_name)
+        name_label.setAlignment(QtCore.Qt.AlignCenter)
+        name_label.setStyleSheet("""
+            font-weight: bold;
+            color: {};
+            font-size: 12px;
+            padding: 5px;
+            background-color: transparent;
+        """.format("#FFD700" if is_fav else "#E0E0E0"))
+        
+        container = QtWidgets.QWidget()
+        container.setStyleSheet("""
+            QWidget {
+                background-color: #2C3E50;
+                border-radius: 8px;
+                border: 2px solid #34495E;
+            }
+            QWidget:hover {
+                background-color: #34495E;
+                border: 2px solid #4FC3F7;
+            }
+        """)
+        
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(8, 8, 8, 8)
+        vbox.setSpacing(5)
+        vbox.addWidget(video_widget)
+        vbox.addWidget(name_label)
+        
+        row = index // 4
+        column = index % 4
+        layout.addWidget(container, row, column, QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+
     def load_animation_panel(self):
         self.tab_widget.clear()
         self.group_boxes.clear()
@@ -913,6 +1404,14 @@ class AnimationDataUI(QtWidgets.QDialog):
         
         # Count for status bar
         total_items = 0
+        
+        # Create Favorites tab first if there are any
+        if self.favorites:
+            self._create_special_tab(u"\u2605 Favorites", self.favorites)
+        
+        # Create Recent tab if there are any
+        if self.recent_list:
+            self._create_special_tab(u"\u23f0 Recent", self.recent_list[:10])
         
         for group_name in sorted(_listdir_unicode(self.file_path)):
             group_path = os.path.join(self.file_path, group_name)
@@ -957,22 +1456,44 @@ class AnimationDataUI(QtWidgets.QDialog):
         self.status_label.setText("Library loaded: {} animations in {} categories".format(total_items, len(self.group_boxes)))
 
     def filter_animations(self, search_text):
-        # For each tab, show/hide thumbnails based on search text
-        for group_name, layout in self.group_boxes.items():
+        # For each tab, show/hide thumbnails based on search text (including tags)
+        search_lower = search_text.lower().strip()
+        
+        for tab_name, layout in self.group_boxes.items():
             for i in range(layout.count()):
                 item = layout.itemAt(i)
                 if item and item.widget():
                     container = item.widget()
-                    # Find animation name label in the container
+                    # Find animation preview widget and name label
                     name_label = None
+                    preview_widget = None
                     for child in container.children():
                         if isinstance(child, QtWidgets.QLabel) and not child.objectName():
                             name_label = child
-                            break
+                        if isinstance(child, AnimationPreviewWidget):
+                            preview_widget = child
                     
                     if name_label:
                         anim_name = name_label.text()
-                        should_show = search_text.lower() in anim_name.lower() or not search_text
+                        should_show = not search_lower or search_lower in anim_name.lower()
+                        
+                        # Also check tags if we have the preview widget
+                        if not should_show and preview_widget and search_lower:
+                            group = getattr(preview_widget, 'group_name', '')
+                            anim = getattr(preview_widget, 'anim_name', '')
+                            if group and anim:
+                                anim_file = os.path.join(self.file_path, group, anim, "animation_data.json")
+                                if os.path.exists(anim_file):
+                                    try:
+                                        data = _read_json(anim_file)
+                                        tags = data.get("tags", [])
+                                        for tag in tags:
+                                            if search_lower in tag.lower():
+                                                should_show = True
+                                                break
+                                    except:
+                                        pass
+                        
                         container.setVisible(should_show)
 
     def update_ui(self):
@@ -1730,15 +2251,21 @@ class AnimationDataUI(QtWidgets.QDialog):
         video_widget.left_clicked.connect(self.fill_name_fields_from_thumbnail)
         video_widget.right_clicked.connect(self.show_context_menu)
     
-        name_label = QtWidgets.QLabel(anim_name)
+        # Check if this is a favorite
+        is_fav = self.is_favorite(group_name, anim_name)
+        display_name = anim_name
+        if is_fav:
+            display_name = u"\u2605 " + anim_name  # Star symbol
+        
+        name_label = QtWidgets.QLabel(display_name)
         name_label.setAlignment(QtCore.Qt.AlignCenter)
         name_label.setStyleSheet("""
             font-weight: bold;
-            color: #E0E0E0;
+            color: {};
             font-size: 14px;
             padding: 5px;
             background-color: transparent;
-        """)
+        """.format("#FFD700" if is_fav else "#E0E0E0"))
     
         container = QtWidgets.QWidget()
         container.setStyleSheet("""
@@ -2297,26 +2824,25 @@ class AnimationDataUI(QtWidgets.QDialog):
             source_scene_info = data.get("scene_info", {})
             is_pose = data.get("is_pose", False)
             source_namespaces = data.get("namespaces", [])
+            anim_info = data.get("anim_info", {})
             
-            # Always show namespace mapping dialog, as requested
-            namespace_mapping = {}
+            # Show load options dialog with mirror and time scale options
+            options_dialog = AnimationLoadOptionsDialog(source_namespaces, anim_info, parent=self)
+            result = options_dialog.exec_()
             
-            # Show dialog to get namespace mapping
-            mapping_dialog = NamespaceMappingDialog(source_namespaces, parent=self)
-            result = mapping_dialog.exec_()
-            
-            if result == QtWidgets.QDialog.Accepted:
-                namespace_mapping = mapping_dialog.get_mapping()
-                
-                # Save mapping if requested
-                if mapping_dialog.should_save_mapping():
-                    # Create a name for the mapping based on character names
-                    mapping_name = "{}_{}_mapping".format(group_name, anim_name)
-                    self.save_namespace_mappings(mapping_name, namespace_mapping)
-            else:
-                # User cancelled mapping, abort loading
+            if result != QtWidgets.QDialog.Accepted:
                 self.status_label.setText("Animation loading cancelled")
                 return
+            
+            # Get options from dialog
+            namespace_mapping = options_dialog.get_mapping()
+            mirror_settings = options_dialog.get_mirror_settings()
+            time_scale = options_dialog.get_time_scale()
+            load_mode = options_dialog.get_load_mode()
+            blend_weight = options_dialog.get_blend_weight()
+            
+            # Add to recent list
+            self.add_to_recent(group_name, anim_name)
 
             # Get current time to use as the starting point
             current_frame = cmds.currentTime(query=True)
@@ -2350,6 +2876,10 @@ class AnimationDataUI(QtWidgets.QDialog):
                     else:
                         self.status_label.setText("Error: Invalid control attribute format: {}".format(ctrl_attr))
                         continue
+                    
+                    # Apply mirror to control name if enabled
+                    if mirror_settings.get('enabled', False):
+                        ctrl = _mirror_control_name(ctrl, mirror_settings)
                     
                     # Extract namespace and control name
                     namespace = ""
@@ -2420,6 +2950,10 @@ class AnimationDataUI(QtWidgets.QDialog):
                                 time = current_frame
                                 value = keyframes[1]  # Value is at index 1
                                 
+                                # Apply mirror to value if enabled
+                                if mirror_settings.get('enabled', False):
+                                    value = _mirror_attr_value(attr, value, mirror_settings.get('mirror_values', True))
+                                
                                 try:
                                     # First make sure any existing animation is removed
                                     try:
@@ -2451,23 +2985,29 @@ class AnimationDataUI(QtWidgets.QDialog):
                             for i in range(0, len(keyframes), 2):
                                 if i + 1 < len(keyframes):  # Make sure we have a time-value pair
                                     source_time = keyframes[i]
-                                    time = source_time - start_frame + current_frame
+                                    # Apply time scale
+                                    time = current_frame + (source_time - start_frame) / time_scale
                                     value = keyframes[i + 1]
+                                    
+                                    # Apply mirror to value if enabled
+                                    if mirror_settings.get('enabled', False):
+                                        value = _mirror_attr_value(attr, value, mirror_settings.get('mirror_values', True))
 
                                     try:
                                         # First make sure any existing animation is removed at this frame
-                                        try:
-                                            anim_curves = cmds.listConnections(
-                                                "{}.{}".format(ctrl_match, attr), 
-                                                destination=False, 
-                                                source=True, 
-                                                type="animCurve"
-                                            ) or []
-                                            
-                                            for curve in anim_curves:
-                                                cmds.cutKey(curve, time=(time, time))
-                                        except:
-                                            pass
+                                        if load_mode == 'replace':
+                                            try:
+                                                anim_curves = cmds.listConnections(
+                                                    "{}.{}".format(ctrl_match, attr), 
+                                                    destination=False, 
+                                                    source=True, 
+                                                    type="animCurve"
+                                                ) or []
+                                                
+                                                for curve in anim_curves:
+                                                    cmds.cutKey(curve, time=(time, time))
+                                            except:
+                                                pass
                                             
                                         # Set the keyframe with the value
                                         cmds.setKeyframe(ctrl_match, attribute=attr, time=(time, time), value=value)
@@ -2590,8 +3130,20 @@ class AnimationDataUI(QtWidgets.QDialog):
             }
         """)
         
-        # Add menu actions - simplified menu
+        # Add menu actions
         load_action = context_menu.addAction("Load Animation")
+        
+        context_menu.addSeparator()
+        
+        # Favorites toggle
+        is_fav = self.is_favorite(group_name, anim_name)
+        if is_fav:
+            fav_action = context_menu.addAction(u"\u2605 Remove from Favorites")
+        else:
+            fav_action = context_menu.addAction(u"\u2606 Add to Favorites")
+        
+        # Tags and notes
+        tags_action = context_menu.addAction("Edit Tags & Notes...")
         
         context_menu.addSeparator()
         
@@ -2606,10 +3158,113 @@ class AnimationDataUI(QtWidgets.QDialog):
         
         if action == load_action:
             self.load_animation(group_name, anim_name)
+        elif action == fav_action:
+            if is_fav:
+                self.remove_from_favorites(group_name, anim_name)
+            else:
+                self.add_to_favorites(group_name, anim_name)
+        elif action == tags_action:
+            self.edit_tags_notes(group_name, anim_name)
         elif action == update_action:
             self.update_animation_from_scene(group_name, anim_name)
         elif action == delete_action:
             self.delete_animation(group_name, anim_name)
+
+    def edit_tags_notes(self, group_name, anim_name):
+        """Open dialog to edit tags and notes for an animation"""
+        anim_folder = os.path.join(self.file_path, group_name, anim_name)
+        anim_file = os.path.join(anim_folder, "animation_data.json")
+        
+        if not os.path.exists(anim_file):
+            QtWidgets.QMessageBox.warning(self, "Warning", "Animation data not found.")
+            return
+        
+        # Load existing data
+        data = _read_json(anim_file)
+        current_tags = data.get("tags", [])
+        current_notes = data.get("notes", "")
+        
+        # Create dialog
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Edit Tags & Notes - {}/{}".format(group_name, anim_name))
+        dialog.setMinimumSize(450, 350)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #1C262D; color: white; }
+            QLabel { color: white; font-size: 14px; }
+            QLineEdit, QTextEdit { background-color: #263238; color: white; border: 1px solid #455A64; border-radius: 4px; padding: 5px; }
+            QPushButton { background-color: #4FC3F7; color: #263238; font-weight: bold; padding: 10px 15px; border: none; border-radius: 4px; }
+            QPushButton:hover { background-color: #81D4FA; }
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(dialog)
+        
+        # Tags section
+        layout.addWidget(QtWidgets.QLabel("Tags (comma separated):"))
+        tags_edit = QtWidgets.QLineEdit()
+        tags_edit.setText(", ".join(current_tags))
+        tags_edit.setPlaceholderText("e.g., walk, idle, loop, combat")
+        layout.addWidget(tags_edit)
+        
+        # Suggested tags
+        suggested_tags = ["walk", "run", "idle", "jump", "attack", "hit", "death", "loop", "additive", "facial"]
+        tags_btn_layout = QtWidgets.QHBoxLayout()
+        tags_btn_layout.addWidget(QtWidgets.QLabel("Quick add:"))
+        for tag in suggested_tags[:6]:
+            btn = QtWidgets.QPushButton(tag)
+            btn.setMaximumWidth(60)
+            btn.setStyleSheet("padding: 5px; font-size: 11px;")
+            btn.clicked.connect(lambda checked, t=tag: self._add_tag_to_edit(tags_edit, t))
+            tags_btn_layout.addWidget(btn)
+        tags_btn_layout.addStretch()
+        layout.addLayout(tags_btn_layout)
+        
+        # Notes section
+        layout.addWidget(QtWidgets.QLabel("Notes:"))
+        notes_edit = QtWidgets.QTextEdit()
+        notes_edit.setText(current_notes)
+        notes_edit.setPlaceholderText("Add any notes or description for this animation...")
+        layout.addWidget(notes_edit)
+        
+        # Buttons
+        btn_layout = QtWidgets.QHBoxLayout()
+        save_btn = QtWidgets.QPushButton("Save")
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.setStyleSheet("background-color: #455A64; color: white;")
+        btn_layout.addStretch()
+        btn_layout.addWidget(save_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        def save_and_close():
+            # Parse tags
+            tags_text = tags_edit.text().strip()
+            new_tags = [t.strip() for t in tags_text.split(",") if t.strip()]
+            new_notes = notes_edit.toPlainText()
+            
+            # Update data
+            data["tags"] = new_tags
+            data["notes"] = new_notes
+            
+            # Save
+            _write_json(anim_file, data)
+            self.status_label.setText("Tags and notes saved for {}/{}".format(group_name, anim_name))
+            dialog.accept()
+        
+        save_btn.clicked.connect(save_and_close)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        dialog.exec_()
+    
+    def _add_tag_to_edit(self, line_edit, tag):
+        """Helper to add a tag to the tag line edit"""
+        current = line_edit.text().strip()
+        if current:
+            tags = [t.strip() for t in current.split(",") if t.strip()]
+            if tag not in tags:
+                tags.append(tag)
+            line_edit.setText(", ".join(tags))
+        else:
+            line_edit.setText(tag)
 
     def update_animation_from_scene(self, group_name, anim_name):
         """Updates existing animation with current scene, preserving settings"""
