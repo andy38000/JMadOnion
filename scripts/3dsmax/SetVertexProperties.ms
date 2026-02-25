@@ -2,8 +2,8 @@
     SetVertexProperties.ms
     -----------------------
     自动收集场景中所有 Geometry(Mesh) 模型，并将顶点属性设置为标准值:
-        Vertex Color        = White (255, 255, 255)
-        Vertex Illumination = Black (0, 0, 0)
+        Vertex Color        = White (R:255, G:255, B:255)
+        Vertex Illumination = White (R:255, G:255, B:255)
         Vertex Alpha        = 100.0 (完全不透明)
 
     ★ 保留 Skin / Physique 等修改器，不会塌陷修改器堆栈。
@@ -40,12 +40,11 @@
     if not (queryBox ("场景中共找到 " + allGeo.count as string + " 个 Mesh 模型（已排除骨骼），\n是否全部设置为标准顶点属性？") title:"确认") do
         return undefined
 
-    local vertColor = color 255 255 255
-    local vertIllum = color 0 0 0
-    local vertAlpha = color 255 255 255
+    local vertColor = color 255 255 255   -- Color:        R:255 G:255 B:255
+    local vertIllum = color 255 255 255   -- Illumination: R:255 G:255 B:255
+    local vertAlpha = color 255 255 255   -- Alpha: 100%
 
     local whiteP3 = [1.0, 1.0, 1.0]
-    local blackP3 = [0.0, 0.0, 0.0]
 
     local processedCount = 0
     local skippedNames   = #()
@@ -108,7 +107,7 @@
         local n2 = meshop.getNumMapVerts obj -2
 
         for v = 1 to n0 do meshop.setMapVert obj  0 v whiteP3
-        for v = 1 to n1 do meshop.setMapVert obj -1 v blackP3
+        for v = 1 to n1 do meshop.setMapVert obj -1 v whiteP3
         for v = 1 to n2 do meshop.setMapVert obj -2 v whiteP3
         true
     )
