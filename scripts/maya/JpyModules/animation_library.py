@@ -83,6 +83,22 @@ def _open_file(path, mode='r'):
     return io.open(path, mode, encoding='utf-8')
 
 
+def _read_json(path):
+    """Read JSON file with proper encoding for Python 2/3"""
+    with io.open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _write_json(path, data):
+    """Write JSON file with proper encoding for Python 2/3"""
+    json_str = json.dumps(data, indent=2, ensure_ascii=False)
+    if PY2:
+        if isinstance(json_str, str):
+            json_str = json_str.decode('utf-8')
+    with io.open(path, 'w', encoding='utf-8') as f:
+        f.write(json_str)
+
+
 def maya_main_window():
     main_window_ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(_long_ptr(main_window_ptr), QtWidgets.QWidget)
@@ -878,9 +894,8 @@ class AnimationDataUI(QtWidgets.QDialog):
                 anim_file = os.path.join(anim_path, "animation_data.json")
                 if os.path.exists(anim_file):
                     try:
-                        with _open_file(anim_file, 'r') as f:
-                            data = json.load(f)
-                            is_pose = data.get("is_pose", False)
+                        data = _read_json(anim_file)
+                        is_pose = data.get("is_pose", False)
                     except Exception as e:
                         logging.warning(_safe_str("Error reading animation data: {}".format(str(e))))
                 
@@ -1221,8 +1236,7 @@ class AnimationDataUI(QtWidgets.QDialog):
             
             # Save with pretty formatting
             try:
-                with _open_file(os.path.join(anim_folder, "animation_data.json"), "w") as f:
-                    json.dump(data_to_save, f, indent=2, ensure_ascii=False)
+                _write_json(os.path.join(anim_folder, "animation_data.json"), data_to_save)
                     
                 self.status_label.setText("Saved animation data to {}".format(anim_folder))
             except Exception as e:
@@ -1776,8 +1790,7 @@ class AnimationDataUI(QtWidgets.QDialog):
         anim_data = {}
         if os.path.exists(anim_file):
             try:
-                with _open_file(anim_file, "r") as f:
-                    data = json.load(f)
+                data = _read_json(anim_file)
                 anim_info = data.get("anim_info", {})
                 is_pose = data.get("is_pose", False)
                 namespaces_used = data.get("namespaces", [])
@@ -1936,10 +1949,9 @@ class AnimationDataUI(QtWidgets.QDialog):
             _ns_save_path = os.path.join(anim_folder, "last_namespace_mapping.json")
             try:
                 if os.path.exists(_ns_save_path):
-                    with _open_file(_ns_save_path, 'r') as _f:
-                        _loaded_map = json.load(_f)
-                        if isinstance(_loaded_map, dict):
-                            namespace_mapping.update({str(k): str(v) for k, v in _loaded_map.items()})
+                    _loaded_map = _read_json(_ns_save_path)
+                    if isinstance(_loaded_map, dict):
+                        namespace_mapping.update({str(k): str(v) for k, v in _loaded_map.items()})
             except Exception:
                 pass
 
@@ -2195,8 +2207,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                     namespace_mapping.clear()
                     namespace_mapping.update(normalized)
                     try:
-                        with _open_file(_ns_save_path, 'w') as _f:
-                            json.dump(namespace_mapping, _f, indent=2, ensure_ascii=False)
+                        _write_json(_ns_save_path, namespace_mapping)
                     except Exception:
                         pass
                     # Rebuild buffers with mapping applied and refresh preview immediately
@@ -2242,8 +2253,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                 cmds.warning(_safe_str("Animation file does not exist: {}".format(anim_file)))
                 return
 
-            with _open_file(anim_file, "r") as f:
-                data = json.load(f)
+            data = _read_json(anim_file)
 
             anim_data = data["animation_data"]
             curve_data = data.get("curve_data", {})  # Get curve data if available
@@ -2576,8 +2586,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                 return
                 
             # Load existing animation data
-            with _open_file(anim_file, "r") as f:
-                data = json.load(f)
+            data = _read_json(anim_file)
                 
             is_pose = data.get("is_pose", False)
             
