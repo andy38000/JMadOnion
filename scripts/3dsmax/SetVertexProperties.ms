@@ -8,19 +8,36 @@
 
     ★ 保留 Skin / Physique 等修改器，不会塌陷修改器堆栈。
     ★ 无需手动选中，脚本自动查找场景中所有 Mesh 模型。
+    ★ 自动排除 Biped 骨骼、Bone、CAT 骨骼等非模型对象。
 
     使用方法: 直接在 3ds Max 中运行此脚本即可。
 */
 (
-    -- 自动收集场景中所有几何体对象
-    local allGeo = for obj in objects where superClassOf obj == GeometryClass collect obj
+    -- 判断对象是否为骨骼/Biped（需要排除的类型）
+    fn isBoneOrBiped obj = (
+        local c = classOf obj
+        if c == Biped_Object do return true
+        if c == BoneGeometry do return true
+        if c == CATBone do return true
+        if c == HubObject do return true
+        try (
+            if (isKindOf obj.controller BipSlave_Control) do return true
+            if (isKindOf obj.controller Vertical_Horizontal_Turn) do return true
+        ) catch ()
+        false
+    )
+
+    -- 自动收集场景中所有几何体对象，排除骨骼和 Biped
+    local allGeo = for obj in objects where (
+        superClassOf obj == GeometryClass and not (isBoneOrBiped obj)
+    ) collect obj
 
     if allGeo.count == 0 do (
         messageBox "场景中没有找到任何 Mesh 模型。" title:"提示"
         return undefined
     )
 
-    if not (queryBox ("场景中共找到 " + allGeo.count as string + " 个模型，\n是否全部设置为标准顶点属性？") title:"确认") do
+    if not (queryBox ("场景中共找到 " + allGeo.count as string + " 个 Mesh 模型（已排除骨骼），\n是否全部设置为标准顶点属性？") title:"确认") do
         return undefined
 
     local vertColor = color 255 255 255
