@@ -99,6 +99,43 @@ def _write_json(path, data):
         f.write(json_str)
 
 
+def _unicode_path(path):
+    """Ensure path is unicode string for Python 2/3 compatibility"""
+    if path is None:
+        return path
+    if PY2:
+        if isinstance(path, str):
+            # Try UTF-8 first, then system encoding
+            try:
+                return path.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    return path.decode(sys.getfilesystemencoding() or 'utf-8')
+                except UnicodeDecodeError:
+                    return path.decode('utf-8', errors='replace')
+        return path
+    else:
+        if isinstance(path, bytes):
+            return path.decode('utf-8', errors='replace')
+        return path
+
+
+def _listdir_unicode(path):
+    """List directory with proper unicode handling for Python 2/3"""
+    # Ensure path is unicode so os.listdir returns unicode strings
+    unicode_path = _unicode_path(path)
+    try:
+        items = os.listdir(unicode_path)
+    except UnicodeDecodeError:
+        # Fallback: list with bytes and decode each item
+        items = os.listdir(path)
+    
+    result = []
+    for item in items:
+        result.append(_unicode_path(item))
+    return result
+
+
 def maya_main_window():
     main_window_ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(_long_ptr(main_window_ptr), QtWidgets.QWidget)
@@ -877,14 +914,14 @@ class AnimationDataUI(QtWidgets.QDialog):
         # Count for status bar
         total_items = 0
         
-        for group_name in sorted(os.listdir(self.file_path)):
+        for group_name in sorted(_listdir_unicode(self.file_path)):
             group_path = os.path.join(self.file_path, group_name)
             if not os.path.isdir(group_path):
                 continue
                 
             group_items = 0
             
-            for anim_name in sorted(os.listdir(group_path)):
+            for anim_name in sorted(_listdir_unicode(group_path)):
                 anim_path = os.path.join(group_path, anim_name)
                 if not os.path.isdir(anim_path):
                     continue
@@ -906,7 +943,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                 
                 image_files = sorted([
                     os.path.join(preview_dir, f) 
-                    for f in os.listdir(preview_dir) 
+                    for f in _listdir_unicode(preview_dir) 
                     if f.endswith(('.jpg', '.png')) and f.startswith('frame_')
                 ])
                 
@@ -1311,13 +1348,13 @@ class AnimationDataUI(QtWidgets.QDialog):
             # Ensure preview directory exists and is empty
             if os.path.exists(preview_path):
                 # Clean up existing files first
-                for old_file in os.listdir(preview_path):
+                for old_file in _listdir_unicode(preview_path):
                     try:
                         file_path = os.path.join(preview_path, old_file)
                         if os.path.isfile(file_path):
                             os.remove(file_path)
                     except Exception as e:
-                        logging.warning("Could not remove old file: {}".format(str(e)))
+                        logging.warning(_safe_str("Could not remove old file: {}".format(str(e))))
             else:
                 _ensure_dir(preview_path)
             
@@ -1488,13 +1525,13 @@ class AnimationDataUI(QtWidgets.QDialog):
             # Ensure preview directory exists and is empty
             if os.path.exists(preview_path):
                 # Clean up existing files first
-                for old_file in os.listdir(preview_path):
+                for old_file in _listdir_unicode(preview_path):
                     try:
                         file_path = os.path.join(preview_path, old_file)
                         if os.path.isfile(file_path):
                             os.remove(file_path)
                     except Exception as e:
-                        logging.warning("Could not remove old file: {}".format(str(e)))
+                        logging.warning(_safe_str("Could not remove old file: {}".format(str(e))))
             else:
                 _ensure_dir(preview_path)
                     
@@ -1776,7 +1813,7 @@ class AnimationDataUI(QtWidgets.QDialog):
         preview_dir = os.path.dirname(preview_path)
         image_files = sorted([
             os.path.join(preview_dir, f)
-            for f in os.listdir(preview_dir)
+            for f in _listdir_unicode(preview_dir)
             if f.endswith((".jpg", ".png")) and f.startswith("frame_")
         ])
         video_widget.set_image_sequence(image_files, fps=24, is_pose=is_pose)
@@ -2702,7 +2739,7 @@ class AnimationDataUI(QtWidgets.QDialog):
                 
                 # Check if group folder is now empty
                 group_folder = os.path.join(self.file_path, group_name)
-                if os.path.exists(group_folder) and not os.listdir(group_folder):
+                if os.path.exists(group_folder) and not _listdir_unicode(group_folder):
                     os.rmdir(group_folder)
                     
                 self.load_animation_panel()
