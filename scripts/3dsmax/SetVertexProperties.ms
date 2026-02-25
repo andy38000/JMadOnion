@@ -2,9 +2,11 @@
     SetVertexProperties.ms
     -----------------------
     将选中场景中所有 Mesh 模型的顶点属性设置为标准值:
-        Vertex Color       = White (255, 255, 255)
+        Vertex Color        = White (255, 255, 255)
         Vertex Illumination = Black (0, 0, 0)
         Vertex Alpha        = 100.0 (完全不透明)
+
+    ★ 保留 Skin / Physique 等修改器，不会塌陷修改器堆栈。
 
     使用方法: 在 3ds Max 中选中需要处理的模型，然后运行此脚本。
 */
@@ -16,12 +18,78 @@
         return undefined
     )
 
-    local vertColor   = color 255 255 255   -- 白色
-    local vertIllum   = color 0 0 0         -- 黑色
-    local vertAlpha   = color 255 255 255   -- Alpha 100% (白色 = 完全不透明)
+    local vertColor = color 255 255 255
+    local vertIllum = color 0 0 0
+    local vertAlpha = color 255 255 255
+
+    local whiteP3 = [1.0, 1.0, 1.0]
+    local blackP3 = [0.0, 0.0, 0.0]
 
     local processedCount = 0
     local skippedNames   = #()
+
+    -- 检测对象是否带有蒙皮类修改器
+    fn hasSkinModifier obj = (
+        for m in obj.modifiers do
+            if classOf m == Skin or classOf m == Physique do return true
+        false
+    )
+
+    -- 确保 polyop 的 map 通道可用并已初始化
+    fn ensurePolyMapChannel obj ch = (
+        if not (polyop.getMapSupport obj ch) do (
+            polyop.setMapSupport obj ch true
+            polyop.defaultMapFaces obj ch
+        )
+        if (polyop.getNumMapVerts obj ch) == 0 do
+            polyop.defaultMapFaces obj ch
+    )
+
+    -- 确保 meshop 的 map 通道可用并已初始化
+    fn ensureMeshMapChannel obj ch = (
+        if not (meshop.getMapSupport obj ch) do (
+            meshop.setMapSupport obj ch true
+            meshop.defaultMapFaces obj ch
+        )
+        if (meshop.getNumMapVerts obj ch) == 0 do
+            meshop.defaultMapFaces obj ch
+    )
+
+    -- 通过 polyop 设置顶点属性（适用于 Editable Poly 底层）
+    fn setVertPropsEditablePoly obj = (
+        local numVerts = polyop.getNumVerts obj
+        if numVerts == 0 do return false
+
+        local allVerts = #{1..numVerts}
+
+        ensurePolyMapChannel obj  0
+        ensurePolyMapChannel obj -1
+        ensurePolyMapChannel obj -2
+
+        polyop.setVertColor obj  0 allVerts vertColor
+        polyop.setVertColor obj -1 allVerts vertIllum
+        polyop.setVertColor obj -2 allVerts vertAlpha
+        true
+    )
+
+    -- 通过 meshop 设置顶点属性（适用于 Editable Mesh 底层）
+    fn setVertPropsEditableMesh obj = (
+        local numVerts = meshop.getNumVerts obj
+        if numVerts == 0 do return false
+
+        ensureMeshMapChannel obj  0
+        ensureMeshMapChannel obj -1
+        ensureMeshMapChannel obj -2
+
+        local n0 = meshop.getNumMapVerts obj  0
+        local n1 = meshop.getNumMapVerts obj -1
+        local n2 = meshop.getNumMapVerts obj -2
+
+        for v = 1 to n0 do meshop.setMapVert obj  0 v whiteP3
+        for v = 1 to n1 do meshop.setMapVert obj -1 v blackP3
+        for v = 1 to n2 do meshop.setMapVert obj -2 v whiteP3
+        true
+    )
 
     undo "Set Vertex Properties" on (
         for obj in sel do (
@@ -30,56 +98,41 @@
                 continue
             )
 
-            -- 如果对象不是 Editable_Poly 则先转换
-            if classOf obj != Editable_Poly do
-                convertToPoly obj
+            local baseObj = obj.baseObject
+            local success = false
 
-            local numVerts = polyop.getNumVerts obj
-            if numVerts == 0 do (
+            case (classOf baseObj) of (
+                Editable_Poly: (
+                    -- 底层已是 Editable Poly，polyop 可直接穿透修改器堆栈操作
+                    success = setVertPropsEditablePoly obj
+                )
+                Editable_Mesh: (
+                    -- 底层是 Editable Mesh，使用 meshop 穿透修改器堆栈操作
+                    success = setVertPropsEditableMesh obj
+                )
+                default: (
+                    if hasSkinModifier obj then (
+                        -- 底层非可编辑类型且带蒙皮，无法安全转换，跳过
+                        append skippedNames (obj.name + " (底层非Poly/Mesh且有蒙皮)")
+                        continue
+                    ) else (
+                        -- 无蒙皮，可以安全塌陷为 Editable Poly
+                        convertToPoly obj
+                        success = setVertPropsEditablePoly obj
+                    )
+                )
+            )
+
+            if success then
+                processedCount += 1
+            else
                 append skippedNames obj.name
-                continue
-            )
-
-            local allVerts = #{1..numVerts}
-
-            -- 确保顶点色通道可用
-            if not (polyop.getMapSupport obj 0) do (
-                polyop.setMapSupport obj 0 true
-                polyop.defaultMapFaces obj 0
-            )
-            if not (polyop.getMapSupport obj -1) do (
-                polyop.setMapSupport obj -1 true
-                polyop.defaultMapFaces obj -1
-            )
-            if not (polyop.getMapSupport obj -2) do (
-                polyop.setMapSupport obj -2 true
-                polyop.defaultMapFaces obj -2
-            )
-
-            -- 如果通道内没有 map 顶点，初始化默认映射
-            if (polyop.getNumMapVerts obj 0) == 0 do
-                polyop.defaultMapFaces obj 0
-            if (polyop.getNumMapVerts obj -1) == 0 do
-                polyop.defaultMapFaces obj -1
-            if (polyop.getNumMapVerts obj -2) == 0 do
-                polyop.defaultMapFaces obj -2
-
-            -- 设置顶点颜色 (Channel 0) -> 白色
-            polyop.setVertColor obj 0 allVerts vertColor
-
-            -- 设置顶点照明 (Channel -1) -> 黑色
-            polyop.setVertColor obj -1 allVerts vertIllum
-
-            -- 设置顶点 Alpha (Channel -2) -> 100%
-            polyop.setVertColor obj -2 allVerts vertAlpha
-
-            processedCount += 1
         )
     )
 
     local msg = "处理完成！\n成功处理: " + processedCount as string + " 个对象"
     if skippedNames.count > 0 do (
-        msg += "\n跳过 " + skippedNames.count as string + " 个对象 (非几何体或无顶点):"
+        msg += "\n跳过 " + skippedNames.count as string + " 个对象:"
         for n in skippedNames do
             msg += "\n  - " + n
     )
