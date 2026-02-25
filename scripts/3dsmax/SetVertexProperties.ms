@@ -1,22 +1,27 @@
 /*
     SetVertexProperties.ms
     -----------------------
-    将选中场景中所有 Mesh 模型的顶点属性设置为标准值:
+    自动收集场景中所有 Geometry(Mesh) 模型，并将顶点属性设置为标准值:
         Vertex Color        = White (255, 255, 255)
         Vertex Illumination = Black (0, 0, 0)
         Vertex Alpha        = 100.0 (完全不透明)
 
     ★ 保留 Skin / Physique 等修改器，不会塌陷修改器堆栈。
+    ★ 无需手动选中，脚本自动查找场景中所有 Mesh 模型。
 
-    使用方法: 在 3ds Max 中选中需要处理的模型，然后运行此脚本。
+    使用方法: 直接在 3ds Max 中运行此脚本即可。
 */
 (
-    local sel = selection as array
+    -- 自动收集场景中所有几何体对象
+    local allGeo = for obj in objects where superClassOf obj == GeometryClass collect obj
 
-    if sel.count == 0 do (
-        messageBox "请先选中至少一个模型对象。" title:"提示"
+    if allGeo.count == 0 do (
+        messageBox "场景中没有找到任何 Mesh 模型。" title:"提示"
         return undefined
     )
+
+    if not (queryBox ("场景中共找到 " + allGeo.count as string + " 个模型，\n是否全部设置为标准顶点属性？") title:"确认") do
+        return undefined
 
     local vertColor = color 255 255 255
     local vertIllum = color 0 0 0
@@ -92,12 +97,7 @@
     )
 
     undo "Set Vertex Properties" on (
-        for obj in sel do (
-            if superClassOf obj != GeometryClass do (
-                append skippedNames obj.name
-                continue
-            )
-
+        for obj in allGeo do (
             local baseObj = obj.baseObject
             local success = false
 
