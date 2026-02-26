@@ -146,6 +146,11 @@ fn _doMerge meshNodes = (
 	local totalV = baseMesh.mesh.numverts
 	format "  合并后 %顶点\n" totalV
 
+	-- 修复法线（ResetXForm 在镜像对象上会翻转法线）
+	addModifier baseMesh (Normalmodifier unify:true)
+	collapseStack baseMesh
+	convertToMesh baseMesh
+
 	-- Step 4: 重建 Skin + 添加骨骼
 	format "Step 4: 重建 Skin...\n"
 	sliderTime = 0
