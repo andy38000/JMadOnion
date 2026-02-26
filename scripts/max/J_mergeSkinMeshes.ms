@@ -214,12 +214,11 @@ fn _doMerge meshNodes = (
 
 try (destroyDialog ::dlgMSM) catch()
 
-rollout dlgMSM "合并蒙皮 Mesh" width:300 height:340 (
+rollout dlgMSM "合并蒙皮 Mesh" width:300 height:290 (
 
-	dotNetControl lv "System.Windows.Forms.ListView" width:280 height:180 pos:[10,10]
-	label lbInfo "" pos:[10,198] width:280 height:16
-	button btnMerge "执行合并" width:280 height:40 pos:[10,220] enabled:false
-	button btnSelAll "选中场景所有蒙皮Mesh" width:280 height:28 pos:[10,266]
+	dotNetControl lv "System.Windows.Forms.ListView" width:280 height:200 pos:[10,10]
+	label lbInfo "" pos:[10,218] width:280 height:16
+	button btnMerge "执行合并" width:280 height:40 pos:[10,240] enabled:false
 	timer tmRefresh interval:500 active:true
 
 	local cachedNodes = #()
@@ -290,15 +289,6 @@ rollout dlgMSM "合并蒙皮 Mesh" width:300 height:340 (
 		)
 	)
 
-	on btnSelAll pressed do (
-		local arr = for obj in geometry where (_getSkinType obj) != #none collect obj
-		if arr.count > 0 then (
-			select arr
-			doRefresh()
-			lastSelHash = getSelHash()
-		) else
-			messageBox "场景中没有蒙皮 Mesh。" title:"提示"
-	)
 )
 
 createDialog dlgMSM style:#(#style_titlebar, #style_sysmenu, #style_toolwindow)
