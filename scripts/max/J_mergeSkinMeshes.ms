@@ -120,15 +120,14 @@ fn _doMerge meshNodes = (
 
 	-- Step 2: 移除蒙皮，统一为 Editable Mesh
 	format "Step 2: 移除蒙皮...\n"
-	with redraw off (
-		for obj in skinnedMeshes do (
-			local modsToRemove = for m in obj.modifiers where (classof m == Skin or classof m == Physique) collect m
-			for m in modsToRemove do deleteModifier obj m
-			if obj.modifiers.count > 0 do maxOps.CollapseNodeTo obj 1 true
-			ResetXForm obj
-			collapseStack obj
-			if classof obj != Editable_Mesh do convertToMesh obj
-		)
+	for obj in skinnedMeshes do (
+		local modsToRemove = for m in obj.modifiers where (classof m == Skin or classof m == Physique) collect m
+		for m in modsToRemove do deleteModifier obj m
+		if obj.modifiers.count > 0 do maxOps.CollapseNodeTo obj 1 true
+		ResetXForm obj
+		collapseStack obj
+		convertToMesh obj
+		format "  %: % -> %顶点\n" obj.name (classof obj) obj.mesh.numverts
 	)
 
 	-- Step 3: Attach（不焊点，保持材质）
@@ -137,14 +136,11 @@ fn _doMerge meshNodes = (
 	local vertOffsets = #(0)
 	local curVC = baseMesh.mesh.numverts
 
-	with redraw off (
-		for i = 2 to skinnedMeshes.count do (
-			append vertOffsets curVC
-			local addObj = skinnedMeshes[i]
-			curVC += addObj.mesh.numverts
-			if classof addObj != Editable_Mesh do convertToMesh addObj
-			meshop.attach baseMesh addObj condenseMat:true
-		)
+	for i = 2 to skinnedMeshes.count do (
+		append vertOffsets curVC
+		local addObj = skinnedMeshes[i]
+		curVC += addObj.mesh.numverts
+		meshop.attach baseMesh addObj condenseMat:true
 	)
 
 	local totalV = baseMesh.mesh.numverts
