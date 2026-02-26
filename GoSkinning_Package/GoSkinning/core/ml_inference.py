@@ -288,15 +288,15 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
     
     # 加载模型
     if progress_callback:
-        progress_callback(0.1, "加载模型...")
+        progress_callback(0.1, "Loading model...")
     
     if not inference.load_model(model_name):
-        print(f"[MLSkin] Failed to load model: {model_name}")
+        print("[MLSkin] Failed to load model: " + str(model_name))
         return False
     
     # 获取顶点数据
     if progress_callback:
-        progress_callback(0.2, "获取顶点数据...")
+        progress_callback(0.2, "Getting vertex data...")
     
     vertices = []
     normals = []
@@ -315,14 +315,22 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
     vertices = np.array(vertices, dtype=np.float32)
     normals = np.array(normals, dtype=np.float32)
     
-    # 获取骨骼数据
+    # 按名称排序骨骼（与训练时保持一致）
     if progress_callback:
-        progress_callback(0.3, "获取骨骼数据...")
+        progress_callback(0.3, "Sorting bones...")
     
+    bone_names = [bone.name for bone in bones]
+    sorted_indices = sorted(range(len(bone_names)), key=lambda i: bone_names[i])
+    sorted_bones = [bones[i] for i in sorted_indices]
+    
+    # 创建从排序后索引到原始索引的映射
+    sorted_to_original = {new_idx: sorted_indices[new_idx] for new_idx in range(len(sorted_indices))}
+    
+    # 获取排序后的骨骼数据
     bone_heads = []
     bone_tails = []
     
-    for bone in bones:
+    for bone in sorted_bones:
         pos = bone.transform.pos
         head = [float(pos.x), float(pos.y), float(pos.z)]
         
@@ -349,7 +357,7 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
     
     # 预测权重
     if progress_callback:
-        progress_callback(0.5, "预测权重...")
+        progress_callback(0.5, "Predicting weights...")
     
     weights = inference.predict_weights(vertices, normals, bone_heads, bone_tails, max_influences)
     
@@ -358,24 +366,24 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
     
     # 应用Skin修改器
     if progress_callback:
-        progress_callback(0.7, "应用蒙皮...")
+        progress_callback(0.7, "Applying skin...")
     
     # 添加Skin修改器
     skin_mod = rt.Skin()
     rt.addModifier(mesh_obj, skin_mod)
     
-    # 添加骨骼
+    # 按原始顺序添加骨骼到Skin
     for bone in bones:
         rt.skinOps.addBone(skin_mod, bone, 0)
     
     rt.completeRedraw()
     
-    # 应用权重
-    num_verts = weights.shape[0]
-    for v_idx in range(num_verts):
+    # 应用权重（需要将排序后的索引映射回原始索引）
+    num_verts_out = weights.shape[0]
+    for v_idx in range(num_verts_out):
         if progress_callback and v_idx % 500 == 0:
-            prog = 0.7 + 0.25 * (v_idx / num_verts)
-            progress_callback(prog, f"应用权重 {v_idx}/{num_verts}...")
+            prog = 0.7 + 0.25 * (v_idx / num_verts_out)
+            progress_callback(prog, "Applying weights " + str(v_idx) + "/" + str(num_verts_out))
         
         vert_weights = weights[v_idx]
         
@@ -388,9 +396,11 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
         bone_array = rt.Array()
         weight_array = rt.Array()
         
-        for bi in nonzero:
-            rt.append(bone_array, int(bi) + 1)
-            rt.append(weight_array, float(vert_weights[bi]))
+        for sorted_bi in nonzero:
+            # 将排序后的索引映射回原始索引
+            original_bi = sorted_to_original[sorted_bi]
+            rt.append(bone_array, int(original_bi) + 1)  # 1-indexed for Max
+            rt.append(weight_array, float(vert_weights[sorted_bi]))
         
         try:
             rt.skinOps.setVertexWeights(skin_mod, v_idx + 1, bone_array, weight_array)
@@ -398,6 +408,7 @@ def ml_auto_skin(mesh_obj, bones: List, model_name: str = "general-v4.5",
             pass
     
     if progress_callback:
-        progress_callback(1.0, "完成!")
+        progress_callback(1.0, "Done!")
     
+    print("[MLSkin] Auto skinning completed!")
     return True

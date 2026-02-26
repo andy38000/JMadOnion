@@ -148,6 +148,7 @@ def get_skin_weights(mesh_obj, skin_mod, num_bones: int) -> List[List]:
 def export_skinned_mesh(mesh_obj, output_path: str) -> bool:
     """
     导出单个蒙皮网格的数据
+    骨骼按名称排序，确保训练和推理时顺序一致
     """
     if not MAX_AVAILABLE:
         print("[ExportData] 需要在3ds Max中运行")
@@ -162,32 +163,41 @@ def export_skinned_mesh(mesh_obj, output_path: str) -> bool:
                 break
         
         if not skin_mod:
-            print(f"[ExportData] {mesh_obj.name} 没有Skin修改器")
+            print("[ExportData] " + mesh_obj.name + " 没有Skin修改器")
             return False
         
-        # 获取骨骼
+        # 获取骨骼并记录原始索引
         bones = []
+        bone_names = []
         num_bones = rt.skinOps.getNumberBones(skin_mod)
         for i in range(1, num_bones + 1):
             bone_name = rt.skinOps.getBoneName(skin_mod, i, 0)
             bone_node = rt.getNodeByName(bone_name)
             if bone_node:
                 bones.append(bone_node)
+                bone_names.append(bone_name)
         
         if not bones:
-            print(f"[ExportData] {mesh_obj.name} 没有有效骨骼")
+            print("[ExportData] " + mesh_obj.name + " 没有有效骨骼")
             return False
+        
+        # 按骨骼名称排序，创建映射
+        sorted_indices = sorted(range(len(bone_names)), key=lambda i: bone_names[i])
+        old_to_new = {old: new for new, old in enumerate(sorted_indices)}
+        
+        # 重新排序骨骼
+        sorted_bones = [bones[i] for i in sorted_indices]
         
         # 获取网格数据
         mesh_data = get_mesh_data(mesh_obj)
         if not mesh_data:
             return False
         
-        # 获取骨骼数据
-        bone_data = get_bone_data(bones)
+        # 获取排序后的骨骼数据
+        bone_data = get_bone_data(sorted_bones)
         
-        # 获取权重
-        weights = get_skin_weights(mesh_obj, skin_mod, len(bones))
+        # 获取权重并重映射骨骼索引
+        weights = get_skin_weights_remapped(mesh_obj, skin_mod, old_to_new)
         
         # 组装数据
         export_data = {
@@ -196,22 +206,54 @@ def export_skinned_mesh(mesh_obj, output_path: str) -> bool:
             'normals': mesh_data['normals'],
             'faces': mesh_data['faces'],
             'bones': bone_data,
-            'weights': weights
+            'weights': weights,
+            'bone_order': 'sorted_by_name'  # 标记排序方式
         }
         
         # 保存
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(export_data, f, indent=2)
         
-        print(f"[ExportData] 已导出: {output_path}")
-        print(f"  - 顶点数: {len(mesh_data['vertices'])}")
-        print(f"  - 骨骼数: {len(bone_data)}")
+        print("[ExportData] 已导出: " + output_path)
+        print("  - 顶点数: " + str(len(mesh_data['vertices'])))
+        print("  - 骨骼数: " + str(len(bone_data)))
         
         return True
         
     except Exception as e:
-        print(f"[ExportData] 导出失败: {e}")
+        print("[ExportData] 导出失败: " + str(e))
         return False
+
+
+def get_skin_weights_remapped(mesh_obj, skin_mod, old_to_new):
+    """
+    获取蒙皮权重并重映射骨骼索引
+    """
+    weights = []
+    
+    try:
+        num_verts = rt.skinOps.getNumberVertices(skin_mod)
+        
+        for v_idx in range(1, num_verts + 1):
+            vert_weights = []
+            num_weights = rt.skinOps.getVertexWeightCount(skin_mod, v_idx)
+            
+            for w_idx in range(1, num_weights + 1):
+                bone_id = rt.skinOps.getVertexWeightBoneID(skin_mod, v_idx, w_idx)
+                weight = rt.skinOps.getVertexWeight(skin_mod, v_idx, w_idx)
+                
+                if weight > 0.001:
+                    old_idx = bone_id - 1  # 转为0-indexed
+                    if old_idx in old_to_new:
+                        new_idx = old_to_new[old_idx]
+                        vert_weights.append([new_idx, weight])
+            
+            weights.append(vert_weights)
+        
+    except Exception as e:
+        print("[ExportData] 获取权重失败: " + str(e))
+    
+    return weights
 
 
 def batch_export(output_dir: str):
