@@ -368,11 +368,11 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 	)
 
 	fn refreshList = (
+		lv.BeginUpdate()
 		lv.Items.Clear()
 		cachedMeshNodes = #()
 		local totalVerts = 0
 		local skinCount = 0
-		local allBoneCount = 0
 		local selArray = for obj in selection where superClassOf obj == GeometryClass collect obj
 		for obj in selArray do (
 			append cachedMeshNodes obj
@@ -382,13 +382,11 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 			item.SubItems.Add (verts as string)
 			local skinType = _msm_getSkinType obj
 			if skinType != #none then (
-				local bCount = _msm_getBoneCount obj
-				allBoneCount += bCount
 				local typeStr = "?"
 				if skinType == #skin then typeStr = "Skin"
 				else if skinType == #physique then typeStr = "Physique"
 				item.SubItems.Add typeStr
-				item.SubItems.Add (bCount as string)
+				item.SubItems.Add "-"
 				skinCount += 1
 			) else (
 				item.SubItems.Add "无"
@@ -396,10 +394,11 @@ rollout rollMergeSkinMeshes "合并蒙皮 Mesh 工具" width:340 height:440 (
 			)
 			lv.Items.Add item
 		)
+		lv.EndUpdate()
 		if selArray.count > 0 do select selArray
 		lbInfo1.text = "蒙皮 Mesh 数量: " + skinCount as string
 		lbInfo2.text = "总顶点数: " + totalVerts as string
-		lbInfo3.text = "总骨骼数: " + allBoneCount as string
+		lbInfo3.text = "共 " + selArray.count as string + " 个对象"
 		btnMerge.enabled = (cachedMeshNodes.count >= 2 and skinCount >= 1)
 	)
 
