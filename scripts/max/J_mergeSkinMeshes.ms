@@ -118,7 +118,7 @@ fn _doMerge meshNodes = (
 			if findItem allBoneNames bn == 0 do append allBoneNames bn
 	format "  共%骨骼\n" allBoneNames.count
 
-	-- Step 2: 移除蒙皮
+	-- Step 2: 移除蒙皮，统一为 Editable Mesh
 	format "Step 2: 移除蒙皮...\n"
 	with redraw off (
 		for obj in skinnedMeshes do (
@@ -127,6 +127,7 @@ fn _doMerge meshNodes = (
 			if obj.modifiers.count > 0 do maxOps.CollapseNodeTo obj 1 true
 			ResetXForm obj
 			collapseStack obj
+			if classof obj != Editable_Mesh do convertToMesh obj
 		)
 	)
 
@@ -139,8 +140,10 @@ fn _doMerge meshNodes = (
 	with redraw off (
 		for i = 2 to skinnedMeshes.count do (
 			append vertOffsets curVC
-			curVC += skinnedMeshes[i].mesh.numverts
-			meshop.attach baseMesh skinnedMeshes[i] condenseMat:true
+			local addObj = skinnedMeshes[i]
+			curVC += addObj.mesh.numverts
+			if classof addObj != Editable_Mesh do convertToMesh addObj
+			meshop.attach baseMesh addObj condenseMat:true
 		)
 	)
 
