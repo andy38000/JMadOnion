@@ -1071,6 +1071,11 @@ class SplittingWeightTool(object):
 
         existing_cls = get_skin_cluster(mesh)
 
+        if existing_cls and vtx_filter_set is not None:
+            self._do_partial_vertex_weights(
+                mesh, macro_jnt, existing_cls, vtx_filter_set)
+            return
+
         if existing_cls:
             skin_cls = existing_cls
             influence_names = get_influence_objects(skin_cls)
@@ -1106,8 +1111,6 @@ class SplittingWeightTool(object):
                 weights = get_current_weights(skin_cls, dag_path, components)
 
                 for i in range(num_vtx):
-                    if vtx_filter_set is not None and i not in vtx_filter_set:
-                        continue
                     wr = root_w[i]
                     wm = macro_w[i]
                     weights[i * num_inf + root_idx] = wr * (1.0 - wm)
@@ -1127,12 +1130,76 @@ class SplittingWeightTool(object):
             params, control_crv, weighted_indices, macro_w = \
                 build_hierarchy_macro_weights(mesh, root_jnt, macro_jnt)
 
-        if vtx_filter_set is not None:
-            weighted_indices = [i for i in weighted_indices
-                                if i in vtx_filter_set]
-
         weighted_vtx_sels = [
             mesh.name() + '.vtx[%d]' % i for i in weighted_indices
+        ]
+        split_weights_from_macro_hierarchy(
+            mesh, macro_jnt, params, control_crv, weighted_vtx_sels
+        )
+
+    def _do_partial_vertex_weights(self, mesh, macro_jnt, skin_cls,
+                                   vtx_filter_set):
+        """Redistribute existing weights for selected vertices only.
+
+        For each selected vertex, gathers all weight currently held by the
+        macro joint and its entire hierarchy, pools it into the macro joint,
+        then splits it back out to the child joints using the hierarchy
+        curve distribution.  Non-selected vertices are left untouched.
+        """
+        influence_names = get_influence_objects(skin_cls)
+
+        jnt_list = []
+        hierarchy_break(get_path_list(macro_jnt), jnt_list)
+        hierarchy_names = [j[1].name() for j in jnt_list]
+
+        add_joints = [n for n in hierarchy_names
+                      if n not in influence_names]
+        if add_joints:
+            pmc.skinCluster(skin_cls, edit=True, ai=add_joints, wt=0)
+            influence_names = get_influence_objects(skin_cls)
+
+        macro_idx = influence_names.index(macro_jnt.name())
+        hierarchy_indices = [influence_names.index(n)
+                             for n in hierarchy_names
+                             if n in influence_names]
+
+        num_inf = len(influence_names)
+        dag_path, components = get_geometry_components(skin_cls)
+        weights = get_current_weights(skin_cls, dag_path, components)
+
+        has_weight = False
+        for i in vtx_filter_set:
+            pool = 0.0
+            for j in hierarchy_indices:
+                pool += weights[i * num_inf + j]
+                if j != macro_idx:
+                    weights[i * num_inf + j] = 0.0
+            weights[i * num_inf + macro_idx] = pool
+            if pool > 0.0001:
+                has_weight = True
+
+        if not has_weight:
+            pmc.warning(
+                "Selected vertices have no weight on the macro joint "
+                "hierarchy (%s). Nothing to redistribute." % macro_jnt.name())
+            return
+
+        inf_indices_arr = OpenMaya.MIntArray(num_inf)
+        for ii in range(num_inf):
+            inf_indices_arr.set(ii, ii)
+        skin_cls.__apimfn__().setWeights(
+            dag_path, components, inf_indices_arr, weights, True)
+
+        point_list = [pmc.xform(j[1], q=True, t=True, ws=True)
+                      for j in jnt_list]
+        control_crv = pmc.curve(
+            d=1, p=point_list,
+            name=macro_jnt.name() + '_hierarchyCrv')
+
+        params = get_vertices_to_params(mesh, control_crv, surface=None)
+
+        weighted_vtx_sels = [
+            mesh.name() + '.vtx[%d]' % i for i in sorted(vtx_filter_set)
         ]
         split_weights_from_macro_hierarchy(
             mesh, macro_jnt, params, control_crv, weighted_vtx_sels,
