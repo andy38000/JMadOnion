@@ -1073,7 +1073,7 @@ class SplittingWeightTool(object):
 
         if existing_cls and vtx_filter_set is not None:
             self._do_partial_vertex_weights(
-                mesh, macro_jnt, existing_cls, vtx_filter_set)
+                mesh, macro_jnt, root_jnt, existing_cls, vtx_filter_set)
             return
 
         if existing_cls:
@@ -1137,14 +1137,21 @@ class SplittingWeightTool(object):
             mesh, macro_jnt, params, control_crv, weighted_vtx_sels
         )
 
-    def _do_partial_vertex_weights(self, mesh, macro_jnt, skin_cls,
-                                   vtx_filter_set):
+    def _do_partial_vertex_weights(self, mesh, macro_jnt, root_jnt,
+                                   skin_cls, vtx_filter_set):
         """Redistribute existing weights for selected vertices only.
 
-        For each selected vertex, gathers all weight currently held by the
-        macro joint and its entire hierarchy, pools it into the macro joint,
-        then splits it back out to the child joints using the hierarchy
-        curve distribution.  Non-selected vertices are left untouched.
+        For each selected vertex the weight pool is gathered from TWO
+        sources and consolidated into the macro joint:
+
+        1. **Hierarchy joints** -- any weight already on the macro joint
+           or its children is recollected.
+        2. **Root joint** -- weight on the root joint (e.g. Head) is
+           transferred to the braid/tail hierarchy.
+
+        The pooled weight is then split among the child joints via the
+        hierarchy curve distribution.  Non-selected vertices and weight
+        on joints outside root+hierarchy are left untouched.
         """
         influence_names = get_influence_objects(skin_cls)
 
@@ -1159,9 +1166,15 @@ class SplittingWeightTool(object):
             influence_names = get_influence_objects(skin_cls)
 
         macro_idx = influence_names.index(macro_jnt.name())
-        hierarchy_indices = [influence_names.index(n)
-                             for n in hierarchy_names
-                             if n in influence_names]
+        hierarchy_idx_set = set()
+        for n in hierarchy_names:
+            if n in influence_names:
+                hierarchy_idx_set.add(influence_names.index(n))
+
+        root_idx = None
+        root_name = root_jnt.name() if root_jnt else ''
+        if root_name and root_name in influence_names:
+            root_idx = influence_names.index(root_name)
 
         num_inf = len(influence_names)
         dag_path, components = get_geometry_components(skin_cls)
@@ -1170,18 +1183,22 @@ class SplittingWeightTool(object):
         has_weight = False
         for i in vtx_filter_set:
             pool = 0.0
-            for j in hierarchy_indices:
+            for j in hierarchy_idx_set:
                 pool += weights[i * num_inf + j]
                 if j != macro_idx:
                     weights[i * num_inf + j] = 0.0
+            if root_idx is not None and root_idx not in hierarchy_idx_set:
+                pool += weights[i * num_inf + root_idx]
+                weights[i * num_inf + root_idx] = 0.0
             weights[i * num_inf + macro_idx] = pool
             if pool > 0.0001:
                 has_weight = True
 
         if not has_weight:
             pmc.warning(
-                "Selected vertices have no weight on the macro joint "
-                "hierarchy (%s). Nothing to redistribute." % macro_jnt.name())
+                "Selected vertices have no weight on root (%s) or "
+                "hierarchy (%s). Nothing to redistribute."
+                % (root_name, macro_jnt.name()))
             return
 
         inf_indices_arr = OpenMaya.MIntArray(num_inf)
