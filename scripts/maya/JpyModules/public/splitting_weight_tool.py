@@ -55,6 +55,47 @@ def _mpoint_array_from_positions(positions):
     return points
 
 
+def extract_mesh_transform(obj):
+    """Extract the mesh transform node from any selection type.
+
+    Handles Transform, Shape, MeshVertex, MeshFace, MeshEdge, etc.
+    Returns a PyNode Transform or None.
+    """
+    if isinstance(obj, _STRING_TYPES):
+        obj = pmc.PyNode(obj)
+
+    if hasattr(obj, 'node'):
+        obj = obj.node()
+
+    if isinstance(obj, pmc.nodetypes.Shape):
+        return obj.getParent()
+
+    if isinstance(obj, pmc.nodetypes.Transform):
+        return obj
+
+    return None
+
+
+def extract_vertex_indices(obj):
+    """Extract vertex indices from a component selection.
+
+    Args:
+        obj: A PyNode or string that may be a component selection
+             (e.g. MeshVertex) or a transform/shape.
+
+    Returns:
+        A sorted list of integer vertex indices if the input is a
+        vertex component selection, or None if it's a whole object.
+    """
+    if isinstance(obj, _STRING_TYPES):
+        obj = pmc.PyNode(obj)
+
+    if isinstance(obj, pmc.MeshVertex):
+        return sorted(obj.indices())
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 #  Skin cluster getters
 # ---------------------------------------------------------------------------
@@ -63,13 +104,17 @@ def get_skin_cluster(obj):
     """Get the skinCluster of a given object.
 
     Arguments:
-        obj: DAG node name (str) or PyNode.
+        obj: DAG node name (str), PyNode transform, shape, or component.
 
     Returns:
         PyNode skinCluster or None.
     """
     if isinstance(obj, _STRING_TYPES):
         obj = pmc.PyNode(obj)
+
+    transform = extract_mesh_transform(obj)
+    if transform is not None:
+        obj = transform
 
     try:
         shape = obj.getShape()
@@ -552,12 +597,19 @@ def build_hierarchy_macro_weights(mesh, root_jnt, macro_jnt):
     return params, control_crv, weighted_indices, weight_dict[macro_jnt.name()]
 
 
-def maintain_root_weights(pre_weights, weights, indices, num_vtx, num_influences):
-    """Blend new micro weights back while preserving root contribution."""
+def maintain_root_weights(pre_weights, weights, indices, num_vtx,
+                          num_influences, vertex_filter=None):
+    """Blend new micro weights back while preserving root contribution.
+
+    Args:
+        vertex_filter: Optional set/list of vertex indices to process.
+            If None, all vertices are processed.
+    """
     new_weights = OpenMaya.MDoubleArray()
     new_weights.copy(pre_weights)
 
-    for i in range(num_vtx):
+    vtx_range = vertex_filter if vertex_filter is not None else range(num_vtx)
+    for i in vtx_range:
         macro_w = pre_weights[i * num_influences + indices[0]]
         if macro_w > 0.0001:
             w_sum = 0.0
@@ -573,8 +625,14 @@ def maintain_root_weights(pre_weights, weights, indices, num_vtx, num_influences
 
 
 def split_weights_from_macro_hierarchy(mesh, macro_jnt, params, control,
-                                       weighted_vtx_sels):
-    """Full pipeline: split macro hierarchy into micro joint weights."""
+                                       weighted_vtx_sels,
+                                       vertex_filter=None):
+    """Full pipeline: split macro hierarchy into micro joint weights.
+
+    Args:
+        vertex_filter: Optional set of vertex indices. When provided, only
+            these vertices will have their weights modified.
+    """
     macro_joint = macro_jnt.name()
 
     jnt_list = []
@@ -606,9 +664,10 @@ def split_weights_from_macro_hierarchy(mesh, macro_jnt, params, control,
     delete_ng_node(skin_cls)
     pmc.delete(control)
 
-    pmc.select(weighted_vtx_sels)
-    pmc.ngSkinRelax(numSteps=30, stepSize=0.15)
-    pmc.select(clear=True)
+    if weighted_vtx_sels:
+        pmc.select(weighted_vtx_sels)
+        pmc.ngSkinRelax(numSteps=30, stepSize=0.15)
+        pmc.select(clear=True)
     ng_skin_weight_fix(mesh)
 
     weights = get_current_weights(skin_cls, dag_path, components)
@@ -616,7 +675,8 @@ def split_weights_from_macro_hierarchy(mesh, macro_jnt, params, control,
     num_vtx = weights.length() // num_inf
 
     new_weights = maintain_root_weights(
-        pre_weights, weights, indices, num_vtx, num_inf
+        pre_weights, weights, indices, num_vtx, num_inf,
+        vertex_filter=vertex_filter
     )
     influence_indices = OpenMaya.MIntArray(num_inf)
     for ii in range(num_inf):
@@ -673,6 +733,7 @@ class SplittingWeightTool(object):
         self.is_init = [0, 1, 0, 0, 0]
 
         self.mesh = None
+        self.selected_vertices = None
         self.root_joint = ''
         self.macro_joint = ''
         self.micro_joints = []
@@ -803,7 +864,7 @@ class SplittingWeightTool(object):
 
     @staticmethod
     def _load_to_text_field(tfb_name):
-        sels = cmds.ls(sl=True)
+        sels = cmds.ls(sl=True, fl=False)
         if not sels:
             return None
         cmds.textFieldButtonGrp(tfb_name, e=True, text=sels[0])
@@ -816,12 +877,43 @@ class SplittingWeightTool(object):
     # -- Load callbacks -----------------------------------------------------
 
     def _load_mesh(self, *_args):
-        sel = self._load_to_text_field('mesh_tfb')
-        if sel:
-            self.mesh = pmc.PyNode(sel)
-            self.is_init[0] = 1
-        else:
+        sels = cmds.ls(sl=True, fl=False)
+        if not sels:
+            self.mesh = None
+            self.selected_vertices = None
             self.is_init[0] = 0
+            return
+
+        first_node = pmc.PyNode(sels[0])
+        transform = extract_mesh_transform(first_node)
+        if transform is None:
+            pmc.warning("Selection is not a valid mesh or component.")
+            self.mesh = None
+            self.selected_vertices = None
+            self.is_init[0] = 0
+            return
+
+        all_vtx_indices = set()
+        is_component_sel = False
+        for s in sels:
+            py_s = pmc.PyNode(s)
+            vi = extract_vertex_indices(py_s)
+            if vi is not None:
+                is_component_sel = True
+                all_vtx_indices.update(vi)
+
+        self.mesh = transform
+        if is_component_sel and all_vtx_indices:
+            self.selected_vertices = sorted(all_vtx_indices)
+            vtx_count = len(self.selected_vertices)
+            display_text = '%s  (%d vtx selected)' % (
+                transform.name(), vtx_count)
+            cmds.textFieldButtonGrp('mesh_tfb', e=True, text=display_text)
+        else:
+            self.selected_vertices = None
+            cmds.textFieldButtonGrp('mesh_tfb', e=True,
+                                    text=transform.name())
+        self.is_init[0] = 1
 
     def _load_root(self, *_args):
         sel = self._load_to_text_field('root_tfb')
@@ -971,6 +1063,9 @@ class SplittingWeightTool(object):
     def _do_automatic_weights(self):
         """Core logic for automatic hierarchy weight generation."""
         mesh = self.mesh
+        vtx_filter = self.selected_vertices
+        vtx_filter_set = set(vtx_filter) if vtx_filter is not None else None
+
         root_jnt = pmc.PyNode(self.root_joint)
         macro_jnt = pmc.PyNode(self.macro_joint)
 
@@ -1011,6 +1106,8 @@ class SplittingWeightTool(object):
                 weights = get_current_weights(skin_cls, dag_path, components)
 
                 for i in range(num_vtx):
+                    if vtx_filter_set is not None and i not in vtx_filter_set:
+                        continue
                     wr = root_w[i]
                     wm = macro_w[i]
                     weights[i * num_inf + root_idx] = wr * (1.0 - wm)
@@ -1030,11 +1127,16 @@ class SplittingWeightTool(object):
             params, control_crv, weighted_indices, macro_w = \
                 build_hierarchy_macro_weights(mesh, root_jnt, macro_jnt)
 
+        if vtx_filter_set is not None:
+            weighted_indices = [i for i in weighted_indices
+                                if i in vtx_filter_set]
+
         weighted_vtx_sels = [
             mesh.name() + '.vtx[%d]' % i for i in weighted_indices
         ]
         split_weights_from_macro_hierarchy(
-            mesh, macro_jnt, params, control_crv, weighted_vtx_sels
+            mesh, macro_jnt, params, control_crv, weighted_vtx_sels,
+            vertex_filter=vtx_filter_set
         )
 
     def _separate_selected_shells(self, *_args):
