@@ -152,15 +152,20 @@ class GoSkinningMaya:
                                        progress=v_idx,
                                        status='应用权重: {}/{}'.format(v_idx, num_verts))
                 
+                # 构建所有骨骼的权重列表（包括0权重的，用于清除旧值）
                 transform_value = []
                 for b_idx, joint in enumerate(influences):
                     w = float(weights[v_idx, b_idx])
-                    if w > 0.001:
-                        transform_value.append((joint, w))
+                    transform_value.append((joint, w))
                 
+                # 使用 normalize=False 精确设置权重
                 if transform_value:
                     cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
-                                    transformValue=transform_value)
+                                    transformValue=transform_value,
+                                    normalize=False)
+                    # 然后归一化
+                    cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
+                                    normalize=True)
         finally:
             cmds.progressWindow(endProgress=True)
     
