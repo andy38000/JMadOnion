@@ -60,6 +60,8 @@ class GoSkinningMaya:
         models = []
         
         # 默认算法
+        models.append('hybrid (混合算法-最精确)')
+        models.append('voronoi (中心点分区)')
         models.append('joint-boundary-precise (关节分界-精确)')
         models.append('joint-boundary (关节点分界)')
         models.append('spherical-influence (球形影响)')
@@ -601,6 +603,76 @@ class GoSkinningMaya:
         print('[GoSkinning] 关节分界完成')
         return weights
     
+    def calculate_hybrid_weights(self, vertices, bone_heads, bone_tails, joints):
+        """
+        混合算法 - 最精确的分界
+        结合骨骼中心距离和关节点平面分割
+        """
+        if not NGSKIN_AVAILABLE:
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
+        
+        from ngskin_algorithms import JointBoundaryEngine
+        
+        engine = JointBoundaryEngine()
+        hierarchy = self.get_bone_hierarchy(joints)
+        
+        print('[GoSkinning] 使用混合算法，骨骼层级: {} 对'.format(len(hierarchy)))
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True, progress=pct,
+                                   status='混合算法: {}%'.format(pct))
+        
+        cmds.progressWindow(title='混合算法', progress=0, status='计算中...',
+                           isInterruptable=False, maxValue=100)
+        
+        try:
+            weights = engine.assign_weights_hybrid(
+                vertices, bone_heads, bone_tails,
+                bone_hierarchy=hierarchy,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
+    def calculate_voronoi_weights(self, vertices, bone_heads, bone_tails, joints):
+        """
+        Voronoi中心点分区算法
+        每个顶点分配给骨骼中心最近的骨骼
+        """
+        if not NGSKIN_AVAILABLE:
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
+        
+        from ngskin_algorithms import JointBoundaryEngine
+        
+        engine = JointBoundaryEngine()
+        hierarchy = self.get_bone_hierarchy(joints)
+        
+        print('[GoSkinning] 使用Voronoi分区算法')
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True, progress=pct,
+                                   status='Voronoi分区: {}%'.format(pct))
+        
+        cmds.progressWindow(title='Voronoi分区', progress=0, status='计算中...',
+                           isInterruptable=False, maxValue=100)
+        
+        try:
+            weights = engine.assign_weights_voronoi(
+                vertices, bone_heads, bone_tails,
+                bone_hierarchy=hierarchy,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
     def calculate_joint_boundary_precise_weights(self, vertices, normals, bone_heads, bone_tails, joints):
         """
         精确关节分界算法
@@ -1017,6 +1089,16 @@ class GoSkinningMaya:
                 print('[GoSkinning] 使用热扩散算法计算权重...')
                 cmds.progressWindow(endProgress=True)
                 weights = self.calculate_heat_diffusion_weights(mesh, vertices, bone_heads, bone_tails, max_influences)
+            
+            elif 'hybrid' in model_name.lower():
+                print('[GoSkinning] 使用混合算法 (最精确)...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_hybrid_weights(vertices, bone_heads, bone_tails, all_joints)
+            
+            elif 'voronoi' in model_name.lower():
+                print('[GoSkinning] 使用Voronoi中心点分区算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_voronoi_weights(vertices, bone_heads, bone_tails, all_joints)
             
             elif 'joint-boundary-precise' in model_name.lower():
                 print('[GoSkinning] 使用精确关节分界算法...')

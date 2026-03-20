@@ -164,13 +164,139 @@ class JointBoundaryEngine:
                                            bone_hierarchy=None, normals=None,
                                            progress_callback=None):
         """
-        精确关节边界分配
+        精确关节边界分配 v2
         
-        改进:
-        1. 使用距离比例而非简单平面分割
-        2. 考虑顶点到骨骼段的实际距离
-        3. 在边界区域使用加权判断
-        4. 考虑顶点法线方向
+        核心改进：使用到骨骼中心的距离作为主要判断依据
+        在关节点附近使用平面分割作为辅助
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        # 骨骼预计算
+        bone_directions = bone_tails - bone_heads
+        bone_lengths = np.linalg.norm(bone_directions, axis=1)
+        bone_dir_normalized = np.zeros_like(bone_directions)
+        for i in range(num_bones):
+            if bone_lengths[i] > 1e-8:
+                bone_dir_normalized[i] = bone_directions[i] / bone_lengths[i]
+        
+        # 骨骼中心点
+        bone_centers = (bone_heads + bone_tails) / 2
+        
+        # 构建父子骨骼对信息
+        bone_pairs = {}
+        if bone_hierarchy:
+            for child_idx, parent_idx in bone_hierarchy.items():
+                joint_point = bone_heads[child_idx].copy()
+                
+                # 分界面使用子骨骼方向
+                boundary_normal = bone_dir_normalized[child_idx].copy()
+                
+                bone_pairs[child_idx] = {
+                    'child_idx': child_idx,
+                    'parent_idx': parent_idx,
+                    'joint_point': joint_point,
+                    'boundary_normal': boundary_normal
+                }
+                bone_pairs[parent_idx] = bone_pairs[child_idx]
+        
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            
+            # 计算到所有骨骼中心的距离
+            center_distances = []
+            for b_idx in range(num_bones):
+                dist = np.linalg.norm(pos - bone_centers[b_idx])
+                center_distances.append((dist, b_idx))
+            
+            center_distances.sort(key=lambda x: x[0])
+            closest_by_center = center_distances[0][1]
+            
+            # 计算到所有骨骼段的距离
+            segment_distances = []
+            for b_idx in range(num_bones):
+                dist, _ = ClosestJointEngine.point_to_segment_distance(
+                    pos, bone_heads[b_idx], bone_tails[b_idx]
+                )
+                segment_distances.append((dist, b_idx))
+            
+            segment_distances.sort(key=lambda x: x[0])
+            closest_by_segment = segment_distances[0][1]
+            
+            # 如果两种方法结果一致，直接使用
+            if closest_by_center == closest_by_segment:
+                assigned_bone = closest_by_center
+            else:
+                # 结果不一致，需要更精确判断
+                # 检查是否涉及父子关系
+                if closest_by_center in bone_pairs and closest_by_segment in bone_pairs:
+                    pair = bone_pairs[closest_by_center]
+                    child_idx = pair['child_idx']
+                    parent_idx = pair['parent_idx']
+                    
+                    # 使用关节点平面分割
+                    to_vertex = pos - pair['joint_point']
+                    signed_dist = np.dot(to_vertex, pair['boundary_normal'])
+                    
+                    if signed_dist >= 0:
+                        assigned_bone = child_idx
+                    else:
+                        assigned_bone = parent_idx
+                else:
+                    # 不是父子关系，使用距离段最近
+                    assigned_bone = closest_by_segment
+            
+            weights[v_idx, assigned_bone] = 1.0
+        
+        return weights
+    
+    def assign_weights_voronoi(self, vertices, bone_heads, bone_tails, 
+                               bone_hierarchy=None, progress_callback=None):
+        """
+        Voronoi分区算法
+        
+        每个顶点分配给"骨骼中心"最近的骨骼
+        这样分界线自然形成在两个骨骼中心的中垂面上
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        # 骨骼中心点
+        bone_centers = (bone_heads + bone_tails) / 2
+        
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            
+            # 找到最近的骨骼中心
+            min_dist = float('inf')
+            closest_bone = 0
+            
+            for b_idx in range(num_bones):
+                dist = np.linalg.norm(pos - bone_centers[b_idx])
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_bone = b_idx
+            
+            weights[v_idx, closest_bone] = 1.0
+        
+        return weights
+    
+    def assign_weights_hybrid(self, vertices, bone_heads, bone_tails, 
+                              bone_hierarchy=None, progress_callback=None):
+        """
+        混合算法 - 最精确的分界
+        
+        1. 首先按骨骼中心距离粗分
+        2. 对于边界区域的顶点，使用精确的平面分割
+        3. 考虑骨骼方向一致性
         """
         num_verts = len(vertices)
         num_bones = len(bone_heads)
@@ -186,134 +312,62 @@ class JointBoundaryEngine:
         
         bone_centers = (bone_heads + bone_tails) / 2
         
-        # 构建父子骨骼对
-        bone_pairs = []
+        # 构建关节点信息
+        joint_info = {}
         if bone_hierarchy:
             for child_idx, parent_idx in bone_hierarchy.items():
                 joint_point = bone_heads[child_idx].copy()
-                
-                # 计算分界平面法线（混合两个骨骼的方向）
-                parent_dir = bone_dir_normalized[parent_idx]
-                child_dir = bone_dir_normalized[child_idx]
-                
-                # 使用两个骨骼方向的平均作为更自然的分界法线
-                avg_dir = parent_dir + child_dir
-                avg_dir_len = np.linalg.norm(avg_dir)
-                if avg_dir_len > 1e-8:
-                    boundary_normal = avg_dir / avg_dir_len
-                else:
-                    boundary_normal = child_dir.copy()
-                
-                bone_pairs.append({
-                    'child_idx': child_idx,
-                    'parent_idx': parent_idx,
-                    'joint_point': joint_point,
-                    'boundary_normal': boundary_normal,
-                    'child_dir': child_dir,
-                    'parent_dir': parent_dir
-                })
+                joint_info[(child_idx, parent_idx)] = joint_point
+                joint_info[(parent_idx, child_idx)] = joint_point
         
         for v_idx in range(num_verts):
             if progress_callback and v_idx % 100 == 0:
                 progress_callback(v_idx, num_verts)
             
             pos = vertices[v_idx]
-            v_normal = normals[v_idx] if normals is not None else None
             
-            # 计算到所有骨骼的距离
-            bone_distances = []
+            # 计算到所有骨骼中心的距离
+            bone_scores = []
             for b_idx in range(num_bones):
-                dist, _ = ClosestJointEngine.point_to_segment_distance(
+                center_dist = np.linalg.norm(pos - bone_centers[b_idx])
+                segment_dist, _ = ClosestJointEngine.point_to_segment_distance(
                     pos, bone_heads[b_idx], bone_tails[b_idx]
                 )
-                bone_distances.append((dist, b_idx))
+                
+                # 综合评分：中心距离 + 段距离
+                score = center_dist * 0.6 + segment_dist * 0.4
+                bone_scores.append((score, b_idx, center_dist))
             
-            bone_distances.sort(key=lambda x: x[0])
-            closest_bone = bone_distances[0][1]
-            closest_dist = bone_distances[0][0]
+            bone_scores.sort(key=lambda x: x[0])
             
-            assigned_bone = closest_bone
+            best_bone = bone_scores[0][1]
+            best_score = bone_scores[0][0]
             
-            # 检查是否涉及父子骨骼对
-            for pair in bone_pairs:
-                child_idx = pair['child_idx']
-                parent_idx = pair['parent_idx']
+            # 如果第二名的分数很接近，需要精细判断
+            if len(bone_scores) > 1:
+                second_bone = bone_scores[1][1]
+                second_score = bone_scores[1][0]
                 
-                # 只处理涉及的骨骼对
-                if closest_bone not in [child_idx, parent_idx]:
-                    continue
-                
-                # 计算到两个骨骼的距离
-                dist_to_child, _ = ClosestJointEngine.point_to_segment_distance(
-                    pos, bone_heads[child_idx], bone_tails[child_idx]
-                )
-                dist_to_parent, _ = ClosestJointEngine.point_to_segment_distance(
-                    pos, bone_heads[parent_idx], bone_tails[parent_idx]
-                )
-                
-                # 计算相对于分界平面的位置
-                to_vertex = pos - pair['joint_point']
-                signed_dist = np.dot(to_vertex, pair['boundary_normal'])
-                
-                # 计算到关节点的距离
-                dist_to_joint = np.linalg.norm(to_vertex)
-                
-                # === 多因素判断 ===
-                score_child = 0
-                score_parent = 0
-                
-                # 因素1: 平面分界 (权重40%)
-                if signed_dist >= 0:
-                    score_child += 40
-                else:
-                    score_parent += 40
-                
-                # 因素2: 到骨骼段的距离 (权重30%)
-                total_dist = dist_to_child + dist_to_parent + 1e-8
-                dist_ratio_child = 1 - (dist_to_child / total_dist)
-                dist_ratio_parent = 1 - (dist_to_parent / total_dist)
-                score_child += dist_ratio_child * 30
-                score_parent += dist_ratio_parent * 30
-                
-                # 因素3: 沿骨骼方向的投影 (权重20%)
-                proj_on_child = np.dot(to_vertex, pair['child_dir'])
-                proj_on_parent = -np.dot(to_vertex, pair['parent_dir'])
-                
-                if proj_on_child > 0:
-                    score_child += min(proj_on_child / (bone_lengths[child_idx] + 1e-8), 1.0) * 20
-                if proj_on_parent > 0:
-                    score_parent += min(proj_on_parent / (bone_lengths[parent_idx] + 1e-8), 1.0) * 20
-                
-                # 因素4: 法线方向 (权重10%)
-                if v_normal is not None:
-                    v_normal_arr = np.array(v_normal)
-                    v_normal_len = np.linalg.norm(v_normal_arr)
-                    if v_normal_len > 1e-8:
-                        v_normal_normalized = v_normal_arr / v_normal_len
-                        # 法线与骨骼方向的对齐度
-                        align_child = np.dot(v_normal_normalized, pair['child_dir'])
-                        align_parent = np.dot(v_normal_normalized, pair['parent_dir'])
+                # 分数差距小于20%时，使用关节点分割
+                if second_score < best_score * 1.2:
+                    key = (best_bone, second_bone)
+                    if key in joint_info:
+                        joint_point = joint_info[key]
                         
-                        if align_child > align_parent:
-                            score_child += 10
-                        else:
-                            score_parent += 10
-                    else:
-                        score_child += 5
-                        score_parent += 5
-                else:
-                    score_child += 5
-                    score_parent += 5
-                
-                # 最终判断
-                if score_child >= score_parent:
-                    assigned_bone = child_idx
-                else:
-                    assigned_bone = parent_idx
-                
-                break
+                        # 判断在关节点的哪一侧
+                        to_vertex = pos - joint_point
+                        
+                        # 使用两个骨骼中心的连线方向作为分割方向
+                        split_dir = bone_centers[second_bone] - bone_centers[best_bone]
+                        split_dir_len = np.linalg.norm(split_dir)
+                        if split_dir_len > 1e-8:
+                            split_dir = split_dir / split_dir_len
+                            
+                            proj = np.dot(to_vertex, split_dir)
+                            if proj > 0:
+                                best_bone = second_bone
             
-            weights[v_idx, assigned_bone] = 1.0
+            weights[v_idx, best_bone] = 1.0
         
         return weights
     
