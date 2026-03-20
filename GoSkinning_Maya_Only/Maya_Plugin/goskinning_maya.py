@@ -224,14 +224,42 @@ class GoSkinningMaya:
         for joint in joints:
             head = cmds.xform(joint, q=True, ws=True, t=True)
             
+            # 获取子骨骼
             children = cmds.listRelatives(joint, children=True, type='joint')
+            
             if children:
+                # 有子骨骼，使用第一个子骨骼位置作为tail
                 tail = cmds.xform(children[0], q=True, ws=True, t=True)
             else:
-                tail = [head[0] + 10, head[1], head[2]]
+                # 没有子骨骼（末端骨骼如Head）
+                # 尝试获取父骨骼来推算方向
+                parent = cmds.listRelatives(joint, parent=True, type='joint')
+                if parent:
+                    parent_pos = cmds.xform(parent[0], q=True, ws=True, t=True)
+                    # 方向 = head - parent，延伸同样长度
+                    direction = [
+                        head[0] - parent_pos[0],
+                        head[1] - parent_pos[1],
+                        head[2] - parent_pos[2]
+                    ]
+                    length = math.sqrt(direction[0]**2 + direction[1]**2 + direction[2]**2)
+                    if length < 0.001:
+                        length = 10.0
+                    # 使用相同长度延伸
+                    tail = [
+                        head[0] + direction[0],
+                        head[1] + direction[1],
+                        head[2] + direction[2]
+                    ]
+                else:
+                    # 既没有子骨骼也没有父骨骼，使用默认向上方向
+                    tail = [head[0], head[1] + 10, head[2]]
             
             bone_heads.append(head)
             bone_tails.append(tail)
+            
+            print('[GoSkinning] 骨骼 {}: head={:.2f},{:.2f},{:.2f} tail={:.2f},{:.2f},{:.2f}'.format(
+                joint, head[0], head[1], head[2], tail[0], tail[1], tail[2]))
         
         return np.array(bone_heads, dtype=np.float32), np.array(bone_tails, dtype=np.float32)
     
@@ -1505,15 +1533,24 @@ class GoSkinningMaya:
         
         # 收集所有骨骼
         all_joints = []
+        print('[GoSkinning] 输入骨骼: {}'.format(joints_input))
+        
         for joint in joints_input:
             if cmds.objExists(joint) and cmds.objectType(joint) == 'joint':
                 all_joints.append(joint)
+                print('[GoSkinning]   添加骨骼: {}'.format(joint))
                 # 获取所有子骨骼
                 children = cmds.listRelatives(joint, allDescendents=True, type='joint') or []
-                all_joints.extend(children)
+                for child in children:
+                    child_name = child.split('|')[-1]
+                    all_joints.append(child_name)
+                    print('[GoSkinning]     子骨骼: {}'.format(child_name))
+            else:
+                print('[GoSkinning]   骨骼不存在或类型错误: {}'.format(joint))
         
         # 去重并排序
         all_joints = sorted(list(set(all_joints)))
+        print('[GoSkinning] 最终骨骼列表 ({}个): {}'.format(len(all_joints), all_joints))
         
         if not all_joints:
             cmds.warning('未找到有效骨骼!')
