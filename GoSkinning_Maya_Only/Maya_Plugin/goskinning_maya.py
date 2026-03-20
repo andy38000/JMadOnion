@@ -282,20 +282,19 @@ class GoSkinningMaya:
         return skin_cluster
     
     def do_global_skin(self, mesh, root_joint, model_name, max_influences, merge_mesh):
-        """执行全局蒙皮"""
-        print('[GoSkinning] ========== 全局蒙皮 ==========')
-        print('[GoSkinning] 网格: ' + mesh)
-        print('[GoSkinning] 根骨骼: ' + root_joint)
-        print('[GoSkinning] 算法: ' + model_name)
-        
+        """执行全局蒙皮（从根骨骼获取所有骨骼）"""
         # 获取所有骨骼
         all_joints = cmds.listRelatives(root_joint, allDescendents=True, type='joint') or []
         all_joints.append(root_joint)
-        all_joints = list(set(all_joints))
+        all_joints = sorted(list(set(all_joints)))
         
-        # 按名称排序
-        all_joints.sort()
-        
+        return self.do_global_skin_with_joints(mesh, all_joints, model_name, max_influences, merge_mesh)
+    
+    def do_global_skin_with_joints(self, mesh, all_joints, model_name, max_influences, merge_mesh):
+        """执行全局蒙皮（指定骨骼列表）"""
+        print('[GoSkinning] ========== 全局蒙皮 ==========')
+        print('[GoSkinning] 网格: ' + mesh)
+        print('[GoSkinning] 算法: ' + model_name)
         print('[GoSkinning] 骨骼数: ' + str(len(all_joints)))
         
         # 获取顶点数据
@@ -492,24 +491,38 @@ class GoSkinningMaya:
         cmds.showWindow(window)
     
     def get_selected_mesh(self):
-        """获取选中的网格"""
+        """获取选中的网格（支持多选）"""
         sel = cmds.ls(selection=True, transforms=True)
-        if sel:
-            shapes = cmds.listRelatives(sel[0], shapes=True, type='mesh')
+        meshes = []
+        for obj in sel:
+            shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
             if shapes:
-                cmds.textField(self.mesh_field, edit=True, text=sel[0])
-            else:
-                cmds.warning('选中的不是网格对象')
+                meshes.append(obj)
+        
+        if meshes:
+            # 多个网格用逗号分隔
+            cmds.textField(self.mesh_field, edit=True, text=','.join(meshes))
+            print('[GoSkinning] 已选择 {} 个网格: {}'.format(len(meshes), ', '.join(meshes)))
         else:
-            cmds.warning('请先选择一个网格')
+            cmds.warning('请先选择网格对象')
     
     def get_selected_joint(self):
-        """获取选中的骨骼"""
+        """获取选中的骨骼（支持多选，自动获取所有子骨骼）"""
         sel = cmds.ls(selection=True, type='joint')
         if sel:
-            cmds.textField(self.joint_field, edit=True, text=sel[0])
+            # 如果选择了多个骨骼，全部显示
+            if len(sel) > 1:
+                cmds.textField(self.joint_field, edit=True, text=','.join(sel))
+                print('[GoSkinning] 已选择 {} 个骨骼'.format(len(sel)))
+            else:
+                # 单个骨骼，显示根骨骼名称
+                cmds.textField(self.joint_field, edit=True, text=sel[0])
+                # 计算子骨骼数量
+                children = cmds.listRelatives(sel[0], allDescendents=True, type='joint') or []
+                total = len(children) + 1
+                print('[GoSkinning] 已选择根骨骼: {} (共 {} 个骨骼)'.format(sel[0], total))
         else:
-            cmds.warning('请先选择一个骨骼')
+            cmds.warning('请先选择骨骼')
     
     def get_selected_joint_for_skirt(self):
         """获取裙摆骨骼"""
@@ -521,28 +534,64 @@ class GoSkinningMaya:
     
     def execute_global_skin(self):
         """执行全局蒙皮"""
-        mesh = cmds.textField(self.mesh_field, query=True, text=True)
-        root_joint = cmds.textField(self.joint_field, query=True, text=True)
+        mesh_text = cmds.textField(self.mesh_field, query=True, text=True)
+        joint_text = cmds.textField(self.joint_field, query=True, text=True)
         model_name = cmds.optionMenu(self.model_menu, query=True, value=True)
         max_influences = cmds.intSliderGrp(self.max_influences_slider, query=True, value=True)
         merge_mesh = cmds.checkBox(self.merge_mesh_cb, query=True, value=True)
         
-        if not mesh:
+        if not mesh_text:
             cmds.warning('请指定目标网格!')
             return
         
-        if not root_joint:
-            cmds.warning('请指定根骨骼!')
+        if not joint_text:
+            cmds.warning('请指定骨骼!')
             return
         
         if '--' in model_name:
             cmds.warning('请先训练ML模型或选择其他算法!')
             return
         
+        # 解析多个网格
+        meshes = [m.strip() for m in mesh_text.split(',') if m.strip()]
+        
+        # 解析骨骼
+        joints_input = [j.strip() for j in joint_text.split(',') if j.strip()]
+        
+        # 收集所有骨骼
+        all_joints = []
+        for joint in joints_input:
+            if cmds.objExists(joint) and cmds.objectType(joint) == 'joint':
+                all_joints.append(joint)
+                # 获取所有子骨骼
+                children = cmds.listRelatives(joint, allDescendents=True, type='joint') or []
+                all_joints.extend(children)
+        
+        # 去重并排序
+        all_joints = sorted(list(set(all_joints)))
+        
+        if not all_joints:
+            cmds.warning('未找到有效骨骼!')
+            return
+        
+        print('[GoSkinning] 将处理 {} 个网格, {} 个骨骼'.format(len(meshes), len(all_joints)))
+        
         try:
-            self.do_global_skin(mesh, root_joint, model_name, max_influences, merge_mesh)
-            cmds.confirmDialog(title='完成', message='全局蒙皮完成!', button=['OK'])
+            success_count = 0
+            for mesh in meshes:
+                if cmds.objExists(mesh):
+                    print('[GoSkinning] 处理网格: ' + mesh)
+                    self.do_global_skin_with_joints(mesh, all_joints, model_name, max_influences, merge_mesh)
+                    success_count += 1
+                else:
+                    print('[GoSkinning] 网格不存在: ' + mesh)
+            
+            cmds.confirmDialog(title='完成', 
+                              message='全局蒙皮完成!\n处理了 {} 个网格'.format(success_count), 
+                              button=['OK'])
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             cmds.confirmDialog(title='错误', message='蒙皮失败: ' + str(e), button=['OK'])
     
     def execute_local_skin(self):
