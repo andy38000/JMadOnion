@@ -894,6 +894,13 @@ class GoSkinningMaya:
                    backgroundColor=[0.25, 0.35, 0.45],
                    command=lambda x: self.smart_get_selection())
         
+        cmds.separator(height=5, style='none')
+        
+        # 自动检测骨骼按钮
+        cmds.button(label='自动检测骨骼 (只选模型，自动识别相关骨骼)', height=30,
+                   backgroundColor=[0.35, 0.45, 0.35],
+                   command=lambda x: self.auto_detect_and_fill())
+        
         cmds.separator(height=10, style='none')
         
         # 网格选择
@@ -1120,28 +1127,23 @@ class GoSkinningMaya:
             short_name = obj.split('|')[-1]
             obj_type = cmds.objectType(obj)
             
-            # 检查是否是joint
             if obj_type == 'joint':
                 joints.append(short_name)
                 print('[GoSkinning]   骨骼: {}'.format(short_name))
             else:
-                # 检查是否有mesh shape
                 shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
                 if shapes:
                     meshes.append(short_name)
                     print('[GoSkinning]   网格: {}'.format(short_name))
         
-        # 设置网格
         if meshes:
-            meshes = list(dict.fromkeys(meshes))  # 去重
+            meshes = list(dict.fromkeys(meshes))
             cmds.textField(self.mesh_field, edit=True, text=','.join(meshes))
             print('[GoSkinning] >>> 网格: {}'.format(','.join(meshes)))
         
-        # 设置骨骼
         if joints:
-            joints = list(dict.fromkeys(joints))  # 去重
+            joints = list(dict.fromkeys(joints))
             cmds.textField(self.joint_field, edit=True, text=','.join(joints))
-            # 计算总骨骼数
             all_joints = set(joints)
             for j in joints:
                 children = cmds.listRelatives(j, allDescendents=True, type='joint') or []
@@ -1156,6 +1158,207 @@ class GoSkinningMaya:
             cmds.warning('未找到网格!')
         elif not joints:
             cmds.warning('未找到骨骼!')
+    
+    def auto_detect_bones_for_mesh(self, mesh, distance_threshold_multiplier=1.5):
+        """
+        自动检测与网格相关的骨骼
+        
+        Args:
+            mesh: 网格名称
+            distance_threshold_multiplier: 距离阈值倍数(相对于包围盒对角线)
+            
+        Returns:
+            相关骨骼列表
+        """
+        print('[GoSkinning] ========== 自动检测骨骼 ==========')
+        print('[GoSkinning] 网格: {}'.format(mesh))
+        
+        # 获取场景中所有骨骼
+        all_scene_joints = cmds.ls(type='joint', long=True)
+        if not all_scene_joints:
+            print('[GoSkinning] 场景中没有骨骼!')
+            return []
+        
+        print('[GoSkinning] 场景骨骼总数: {}'.format(len(all_scene_joints)))
+        
+        # 获取网格包围盒
+        bbox = cmds.exactWorldBoundingBox(mesh)
+        bbox_min = np.array([bbox[0], bbox[1], bbox[2]])
+        bbox_max = np.array([bbox[3], bbox[4], bbox[5]])
+        bbox_center = (bbox_min + bbox_max) / 2
+        bbox_size = bbox_max - bbox_min
+        bbox_diagonal = np.linalg.norm(bbox_size)
+        
+        print('[GoSkinning] 包围盒大小: {:.2f} x {:.2f} x {:.2f}'.format(
+            bbox_size[0], bbox_size[1], bbox_size[2]))
+        print('[GoSkinning] 包围盒对角线: {:.2f}'.format(bbox_diagonal))
+        
+        # 扩展包围盒
+        expand_margin = bbox_diagonal * 0.3
+        bbox_min_expanded = bbox_min - expand_margin
+        bbox_max_expanded = bbox_max + expand_margin
+        
+        # 距离阈值
+        distance_threshold = bbox_diagonal * distance_threshold_multiplier
+        print('[GoSkinning] 距离阈值: {:.2f}'.format(distance_threshold))
+        
+        # 获取网格顶点(采样)
+        num_verts = cmds.polyEvaluate(mesh, vertex=True)
+        sample_step = max(1, num_verts // 500)  # 最多采样500个顶点
+        
+        sample_verts = []
+        for i in range(0, num_verts, sample_step):
+            pos = cmds.xform('{}.vtx[{}]'.format(mesh, i), q=True, ws=True, t=True)
+            sample_verts.append(pos)
+        sample_verts = np.array(sample_verts, dtype=np.float32)
+        
+        print('[GoSkinning] 采样顶点数: {}'.format(len(sample_verts)))
+        
+        # 检测相关骨骼
+        relevant_joints = set()
+        joint_scores = {}
+        
+        cmds.progressWindow(title='检测骨骼',
+                           progress=0,
+                           status='检测中...',
+                           isInterruptable=True,
+                           maxValue=len(all_scene_joints))
+        
+        try:
+            for idx, joint in enumerate(all_scene_joints):
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    break
+                
+                cmds.progressWindow(edit=True, progress=idx)
+                
+                short_name = joint.split('|')[-1]
+                
+                # 获取骨骼位置
+                joint_pos = cmds.xform(joint, q=True, ws=True, t=True)
+                joint_pos = np.array(joint_pos)
+                
+                # 获取骨骼尾部位置
+                children = cmds.listRelatives(joint, children=True, type='joint')
+                if children:
+                    tail_pos = cmds.xform(children[0], q=True, ws=True, t=True)
+                    tail_pos = np.array(tail_pos)
+                else:
+                    tail_pos = joint_pos
+                
+                # 检查1: 骨骼头/尾是否在扩展包围盒内
+                in_bbox = False
+                if (np.all(joint_pos >= bbox_min_expanded) and 
+                    np.all(joint_pos <= bbox_max_expanded)):
+                    in_bbox = True
+                if (np.all(tail_pos >= bbox_min_expanded) and 
+                    np.all(tail_pos <= bbox_max_expanded)):
+                    in_bbox = True
+                
+                # 检查2: 计算到采样顶点的最小距离
+                min_dist_to_verts = float('inf')
+                for v_pos in sample_verts:
+                    # 点到线段距离
+                    dist = self._point_to_segment_dist(v_pos, joint_pos, tail_pos)
+                    min_dist_to_verts = min(min_dist_to_verts, dist)
+                
+                # 评分
+                score = 0
+                
+                if in_bbox:
+                    score += 50
+                
+                if min_dist_to_verts < distance_threshold:
+                    # 距离越近分数越高
+                    dist_score = (1 - min_dist_to_verts / distance_threshold) * 50
+                    score += dist_score
+                
+                if score > 20:
+                    relevant_joints.add(short_name)
+                    joint_scores[short_name] = score
+                    
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        # 补全骨骼链 - 如果子骨骼被选中，父骨骼链也要选中
+        complete_joints = set(relevant_joints)
+        for joint in relevant_joints:
+            parent = cmds.listRelatives(joint, parent=True, type='joint')
+            while parent:
+                parent_name = parent[0].split('|')[-1]
+                complete_joints.add(parent_name)
+                parent = cmds.listRelatives(parent[0], parent=True, type='joint')
+        
+        # 排序输出
+        result = sorted(list(complete_joints))
+        
+        print('[GoSkinning] 检测到 {} 个相关骨骼 (补全后 {} 个)'.format(
+            len(relevant_joints), len(complete_joints)))
+        
+        if joint_scores:
+            top_joints = sorted(joint_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+            print('[GoSkinning] 前10个评分最高的骨骼:')
+            for j, s in top_joints:
+                print('[GoSkinning]   {}: {:.1f}'.format(j, s))
+        
+        print('[GoSkinning] ========== 检测完成 ==========')
+        
+        return result
+    
+    def _point_to_segment_dist(self, point, seg_start, seg_end):
+        """计算点到线段的距离"""
+        p = np.array(point, dtype=np.float64)
+        a = np.array(seg_start, dtype=np.float64)
+        b = np.array(seg_end, dtype=np.float64)
+        
+        ab = b - a
+        ap = p - a
+        
+        ab_len_sq = np.dot(ab, ab)
+        if ab_len_sq < 1e-8:
+            return np.linalg.norm(ap)
+        
+        t = max(0, min(1, np.dot(ap, ab) / ab_len_sq))
+        closest = a + t * ab
+        
+        return np.linalg.norm(p - closest)
+    
+    def auto_detect_and_fill(self):
+        """自动检测骨骼并填充到UI"""
+        mesh_text = cmds.textField(self.mesh_field, query=True, text=True)
+        
+        if not mesh_text:
+            # 尝试从选择获取网格
+            sel = cmds.ls(selection=True, long=True)
+            meshes = []
+            for obj in sel:
+                shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
+                if shapes:
+                    meshes.append(obj.split('|')[-1])
+            
+            if meshes:
+                mesh_text = ','.join(meshes)
+                cmds.textField(self.mesh_field, edit=True, text=mesh_text)
+            else:
+                cmds.warning('请先选择网格或在输入框中指定网格!')
+                return
+        
+        # 取第一个网格进行检测
+        mesh = mesh_text.split(',')[0].strip()
+        
+        if not cmds.objExists(mesh):
+            cmds.warning('网格不存在: {}'.format(mesh))
+            return
+        
+        # 检测骨骼
+        detected_joints = self.auto_detect_bones_for_mesh(mesh)
+        
+        if detected_joints:
+            cmds.textField(self.joint_field, edit=True, text=','.join(detected_joints))
+            cmds.confirmDialog(title='检测完成',
+                              message='自动检测到 {} 个相关骨骼'.format(len(detected_joints)),
+                              button=['OK'])
+        else:
+            cmds.warning('未检测到相关骨骼!')
     
     def get_selected_mesh(self):
         """获取选中的网格（支持多选）"""
