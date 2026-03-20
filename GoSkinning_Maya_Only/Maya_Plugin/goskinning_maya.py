@@ -1182,7 +1182,7 @@ class GoSkinningMaya:
         cmds.text(label='松弛次数:')
         self.quick_relax_steps = cmds.intField(value=10, minValue=1, maxValue=100, width=60)
         cmds.text(label='  步长:')
-        self.quick_relax_step_size = cmds.floatField(value=0.15, minValue=0.01, maxValue=1.0, precision=2, width=60)
+        self.quick_relax_step_size = cmds.floatField(value=0.30, minValue=0.01, maxValue=1.0, precision=2, width=60)
         cmds.setParent('..')
         
         cmds.separator(height=5, style='none')
