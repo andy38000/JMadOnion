@@ -368,6 +368,13 @@ class GoSkinningMaya:
         
         cmds.separator(height=15)
         
+        # 智能获取按钮
+        cmds.button(label='智能获取 (同时选择网格和骨骼后点击)', height=30,
+                   backgroundColor=[0.25, 0.35, 0.45],
+                   command=lambda x: self.smart_get_selection())
+        
+        cmds.separator(height=10, style='none')
+        
         # 网格选择
         cmds.text(label='目标网格:', align='left')
         mesh_row = cmds.rowLayout(numberOfColumns=2, columnWidth2=(340, 70))
@@ -490,39 +497,119 @@ class GoSkinningMaya:
         
         cmds.showWindow(window)
     
+    def smart_get_selection(self):
+        """智能获取 - 自动分离网格和骨骼"""
+        sel = cmds.ls(selection=True, long=True)
+        
+        if not sel:
+            cmds.warning('请先选择网格和骨骼!')
+            return
+        
+        print('[GoSkinning] ========== 智能获取 ==========')
+        print('[GoSkinning] 选中 {} 个对象'.format(len(sel)))
+        
+        meshes = []
+        joints = []
+        
+        for obj in sel:
+            short_name = obj.split('|')[-1]
+            obj_type = cmds.objectType(obj)
+            
+            # 检查是否是joint
+            if obj_type == 'joint':
+                joints.append(short_name)
+                print('[GoSkinning]   骨骼: {}'.format(short_name))
+            else:
+                # 检查是否有mesh shape
+                shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
+                if shapes:
+                    meshes.append(short_name)
+                    print('[GoSkinning]   网格: {}'.format(short_name))
+        
+        # 设置网格
+        if meshes:
+            meshes = list(dict.fromkeys(meshes))  # 去重
+            cmds.textField(self.mesh_field, edit=True, text=','.join(meshes))
+            print('[GoSkinning] >>> 网格: {}'.format(','.join(meshes)))
+        
+        # 设置骨骼
+        if joints:
+            joints = list(dict.fromkeys(joints))  # 去重
+            cmds.textField(self.joint_field, edit=True, text=','.join(joints))
+            # 计算总骨骼数
+            all_joints = set(joints)
+            for j in joints:
+                children = cmds.listRelatives(j, allDescendents=True, type='joint') or []
+                all_joints.update([c.split('|')[-1] for c in children])
+            print('[GoSkinning] >>> 骨骼: {} (共 {} 个)'.format(','.join(joints), len(all_joints)))
+        
+        print('[GoSkinning] ========== 完成 ==========')
+        
+        if meshes and joints:
+            print('[GoSkinning] 成功获取 {} 个网格, {} 个骨骼根节点'.format(len(meshes), len(joints)))
+        elif not meshes:
+            cmds.warning('未找到网格!')
+        elif not joints:
+            cmds.warning('未找到骨骼!')
+    
     def get_selected_mesh(self):
         """获取选中的网格（支持多选）"""
-        sel = cmds.ls(selection=True, transforms=True)
+        # 获取所有选中的对象
+        sel = cmds.ls(selection=True, long=True)
+        print('[GoSkinning] 选中对象: {}'.format(sel))
+        
         meshes = []
         for obj in sel:
-            shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
+            # 获取短名称
+            short_name = obj.split('|')[-1]
+            
+            # 检查是否是mesh的transform
+            shapes = cmds.listRelatives(obj, shapes=True, type='mesh', fullPath=True)
             if shapes:
-                meshes.append(obj)
+                meshes.append(short_name)
+                print('[GoSkinning]   - 网格: {}'.format(short_name))
+            else:
+                # 也检查对象本身是否是mesh shape
+                if cmds.objectType(obj) == 'mesh':
+                    parent = cmds.listRelatives(obj, parent=True)
+                    if parent:
+                        meshes.append(parent[0])
+                        print('[GoSkinning]   - 网格(从shape): {}'.format(parent[0]))
         
         if meshes:
+            # 去重
+            meshes = list(dict.fromkeys(meshes))
             # 多个网格用逗号分隔
-            cmds.textField(self.mesh_field, edit=True, text=','.join(meshes))
-            print('[GoSkinning] 已选择 {} 个网格: {}'.format(len(meshes), ', '.join(meshes)))
+            result = ','.join(meshes)
+            cmds.textField(self.mesh_field, edit=True, text=result)
+            print('[GoSkinning] === 已选择 {} 个网格: {} ==='.format(len(meshes), result))
         else:
-            cmds.warning('请先选择网格对象')
+            cmds.warning('未找到网格对象! 请确保选择的是网格(mesh)而不是骨骼')
     
     def get_selected_joint(self):
         """获取选中的骨骼（支持多选，自动获取所有子骨骼）"""
-        sel = cmds.ls(selection=True, type='joint')
+        # 获取所有选中的joint
+        sel = cmds.ls(selection=True, type='joint', long=True)
+        print('[GoSkinning] 选中骨骼: {}'.format(sel))
+        
         if sel:
-            # 如果选择了多个骨骼，全部显示
-            if len(sel) > 1:
-                cmds.textField(self.joint_field, edit=True, text=','.join(sel))
-                print('[GoSkinning] 已选择 {} 个骨骼'.format(len(sel)))
+            # 获取短名称
+            short_names = [j.split('|')[-1] for j in sel]
+            
+            if len(short_names) > 1:
+                # 多个骨骼
+                result = ','.join(short_names)
+                cmds.textField(self.joint_field, edit=True, text=result)
+                print('[GoSkinning] === 已选择 {} 个骨骼 ==='.format(len(short_names)))
             else:
-                # 单个骨骼，显示根骨骼名称
-                cmds.textField(self.joint_field, edit=True, text=sel[0])
+                # 单个骨骼，作为根骨骼
+                cmds.textField(self.joint_field, edit=True, text=short_names[0])
                 # 计算子骨骼数量
                 children = cmds.listRelatives(sel[0], allDescendents=True, type='joint') or []
                 total = len(children) + 1
-                print('[GoSkinning] 已选择根骨骼: {} (共 {} 个骨骼)'.format(sel[0], total))
+                print('[GoSkinning] === 已选择根骨骼: {} (包含 {} 个子骨骼) ==='.format(short_names[0], total))
         else:
-            cmds.warning('请先选择骨骼')
+            cmds.warning('未找到骨骼! 请确保选择的是骨骼(joint)')
     
     def get_selected_joint_for_skirt(self):
         """获取裙摆骨骼"""
