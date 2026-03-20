@@ -424,13 +424,34 @@ class GoSkinningMaya:
             dict: {child_index: parent_index}
         """
         hierarchy = {}
-        joint_to_idx = {j: i for i, j in enumerate(joints)}
+        
+        # 支持短名称和完整路径的匹配
+        joint_to_idx = {}
+        for i, j in enumerate(joints):
+            # 存储短名称
+            short_name = j.split('|')[-1]
+            joint_to_idx[short_name] = i
+            joint_to_idx[j] = i  # 也存储原始名称
+        
+        print('[GoSkinning] 骨骼索引映射: {}'.format(joint_to_idx))
         
         for i, joint in enumerate(joints):
             parent = cmds.listRelatives(joint, parent=True, type='joint')
-            if parent and parent[0] in joint_to_idx:
-                hierarchy[i] = joint_to_idx[parent[0]]
+            if parent:
+                parent_name = parent[0]
+                parent_short = parent_name.split('|')[-1]
+                
+                # 先尝试完整名称，再尝试短名称
+                if parent_name in joint_to_idx:
+                    hierarchy[i] = joint_to_idx[parent_name]
+                    print('[GoSkinning]   {} -> {} (父骨骼索引: {})'.format(
+                        joint, parent_name, joint_to_idx[parent_name]))
+                elif parent_short in joint_to_idx:
+                    hierarchy[i] = joint_to_idx[parent_short]
+                    print('[GoSkinning]   {} -> {} (父骨骼索引: {})'.format(
+                        joint, parent_short, joint_to_idx[parent_short]))
         
+        print('[GoSkinning] 骨骼层级关系: {}'.format(hierarchy))
         return hierarchy
     
     def calculate_closest_joint_weights(self, vertices, bone_heads, bone_tails, 
