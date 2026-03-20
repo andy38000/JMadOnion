@@ -62,7 +62,8 @@ class GoSkinningMaya:
         # 默认算法
         models.append('distance-based (距离算法)')
         models.append('heat-diffusion (热扩散)')
-        models.append('closest-joint (最近骨骼-无过渡)')
+        models.append('closest-joint (最近骨骼-基础)')
+        models.append('closest-joint-precise (最近骨骼-精确)')
         models.append('closest-joint+smooth (最近骨骼+平滑)')
         
         # 扫描模型文件夹
@@ -376,6 +377,23 @@ class GoSkinningMaya:
         
         return weights
     
+    def get_bone_hierarchy(self, joints):
+        """
+        获取骨骼层级关系
+        
+        Returns:
+            dict: {child_index: parent_index}
+        """
+        hierarchy = {}
+        joint_to_idx = {j: i for i, j in enumerate(joints)}
+        
+        for i, joint in enumerate(joints):
+            parent = cmds.listRelatives(joint, parent=True, type='joint')
+            if parent and parent[0] in joint_to_idx:
+                hierarchy[i] = joint_to_idx[parent[0]]
+        
+        return hierarchy
+    
     def calculate_closest_joint_weights(self, vertices, bone_heads, bone_tails, 
                                          smooth_iterations=0, smooth_step=0.15):
         """
@@ -410,6 +428,49 @@ class GoSkinningMaya:
         try:
             weights = alg.assign_by_closest_joint(
                 vertices, bone_heads, bone_tails,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
+    def calculate_closest_joint_precise(self, vertices, bone_heads, bone_tails, joints):
+        """
+        精确模式的最近骨骼算法
+        考虑骨骼长度归一化、投影位置、骨骼层级
+        """
+        if not NGSKIN_AVAILABLE:
+            print('[GoSkinning] ngSkin算法不可用，使用距离算法')
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
+        
+        from ngskin_algorithms import ClosestJointEngine
+        
+        engine = ClosestJointEngine()
+        engine.use_bone_length_normalization = True
+        engine.use_projection_weight = True
+        engine.projection_center_bias = 0.4
+        
+        hierarchy = self.get_bone_hierarchy(joints)
+        print('[GoSkinning] 骨骼层级: {} 对父子关系'.format(len(hierarchy)))
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True,
+                                   progress=pct,
+                                   status='精确计算: {}%'.format(pct))
+        
+        cmds.progressWindow(title='精确最近骨骼',
+                           progress=0,
+                           status='计算中...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            weights = engine.assign_weights_precise(
+                vertices, bone_heads, bone_tails,
+                bone_hierarchy=hierarchy,
                 progress_callback=progress_callback
             )
         finally:
@@ -756,8 +817,15 @@ class GoSkinningMaya:
                     smooth_iterations=30, smooth_step=0.15
                 )
             
+            elif 'closest-joint-precise' in model_name.lower():
+                print('[GoSkinning] 使用精确最近骨骼算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_closest_joint_precise(
+                    vertices, bone_heads, bone_tails, all_joints
+                )
+            
             elif 'closest-joint' in model_name.lower():
-                print('[GoSkinning] 使用最近骨骼算法计算权重(无平滑)...')
+                print('[GoSkinning] 使用最近骨骼算法(基础)...')
                 cmds.progressWindow(endProgress=True)
                 weights = self.calculate_closest_joint_weights(vertices, bone_heads, bone_tails)
             

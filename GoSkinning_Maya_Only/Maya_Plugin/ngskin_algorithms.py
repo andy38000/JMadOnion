@@ -194,14 +194,22 @@ class WeightRelaxEngine:
 class ClosestJointEngine:
     """
     最近骨骼权重分配引擎
-    基于 ngSkinTools WeightsByClosestJoint 实现
+    基于 ngSkinTools WeightsByClosestJoint 实现，并进行了优化
     
     原理:
         每个顶点权重100%分配给距离最近的骨骼段
+        
+    优化:
+        1. 骨骼长度归一化 - 短骨骼和长骨骼公平比较
+        2. 投影位置权重 - 优先分配到骨骼中段
+        3. 骨骼半径估算 - 基于骨骼间距估算影响范围
     """
     
     def __init__(self):
         self.use_intersection_ranking = True
+        self.use_bone_length_normalization = True
+        self.use_projection_weight = True
+        self.projection_center_bias = 0.3  # 中心偏好权重
         
     @staticmethod
     def point_to_segment_distance(point, seg_start, seg_end):
@@ -235,14 +243,74 @@ class ClosestJointEngine:
         closest = a + ab_normalized * dot_test
         return np.linalg.norm(p - closest), closest
     
-    def assign_weights(self, vertices, bone_heads, bone_tails, progress_callback=None):
+    @staticmethod
+    def point_to_segment_info(point, seg_start, seg_end):
         """
-        分配最近骨骼权重
+        计算点到线段的详细信息
+        
+        Returns:
+            (distance, closest_point, t_param, is_on_segment)
+            t_param: 0=在head端, 1=在tail端, 0.5=在中间
+        """
+        p = np.array(point, dtype=np.float64)
+        a = np.array(seg_start, dtype=np.float64)
+        b = np.array(seg_end, dtype=np.float64)
+        
+        ab = b - a
+        ap = p - a
+        
+        ab_len = np.linalg.norm(ab)
+        if ab_len < 1e-8:
+            return np.linalg.norm(ap), a, 0.0, False
+        
+        ab_normalized = ab / ab_len
+        dot_test = np.dot(ap, ab_normalized)
+        
+        t_param = dot_test / ab_len
+        
+        if dot_test <= 0:
+            return np.linalg.norm(ap), a, 0.0, False
+        
+        if dot_test >= ab_len:
+            return np.linalg.norm(p - b), b, 1.0, False
+        
+        closest = a + ab_normalized * dot_test
+        return np.linalg.norm(p - closest), closest, t_param, True
+    
+    def calculate_bone_radii(self, bone_heads, bone_tails):
+        """
+        估算每根骨骼的影响半径
+        基于骨骼长度和相邻骨骼距离
+        """
+        num_bones = len(bone_heads)
+        radii = np.zeros(num_bones, dtype=np.float64)
+        
+        for i in range(num_bones):
+            bone_length = np.linalg.norm(bone_tails[i] - bone_heads[i])
+            
+            min_neighbor_dist = float('inf')
+            for j in range(num_bones):
+                if i != j:
+                    d1 = np.linalg.norm(bone_heads[i] - bone_heads[j])
+                    d2 = np.linalg.norm(bone_heads[i] - bone_tails[j])
+                    min_neighbor_dist = min(min_neighbor_dist, d1, d2)
+            
+            if min_neighbor_dist == float('inf'):
+                radii[i] = bone_length * 0.5
+            else:
+                radii[i] = min(bone_length * 0.5, min_neighbor_dist * 0.5)
+        
+        return radii
+    
+    def assign_weights(self, vertices, bone_heads, bone_tails, normals=None, progress_callback=None):
+        """
+        分配最近骨骼权重 (优化版)
         
         Args:
             vertices: 顶点位置 (N, 3)
             bone_heads: 骨骼头部位置 (M, 3)
             bone_tails: 骨骼尾部位置 (M, 3)
+            normals: 顶点法线 (N, 3) 可选
             progress_callback: 进度回调
             
         Returns:
@@ -252,24 +320,126 @@ class ClosestJointEngine:
         num_bones = len(bone_heads)
         weights = np.zeros((num_verts, num_bones), dtype=np.float32)
         
+        bone_lengths = np.array([
+            np.linalg.norm(bone_tails[i] - bone_heads[i]) 
+            for i in range(num_bones)
+        ], dtype=np.float64)
+        
+        max_bone_length = bone_lengths.max() if bone_lengths.max() > 0 else 1.0
+        bone_length_factors = bone_lengths / max_bone_length
+        bone_length_factors = np.maximum(bone_length_factors, 0.1)
+        
         for v_idx in range(num_verts):
             if progress_callback and v_idx % 100 == 0:
                 progress_callback(v_idx, num_verts)
             
             pos = vertices[v_idx]
-            min_dist = float('inf')
+            best_score = float('inf')
             closest_bone = 0
             
             for b_idx in range(num_bones):
-                dist, _ = self.point_to_segment_distance(
+                dist, closest_pt, t_param, on_segment = self.point_to_segment_info(
                     pos, bone_heads[b_idx], bone_tails[b_idx]
                 )
                 
-                if dist < min_dist:
-                    min_dist = dist
+                if self.use_bone_length_normalization:
+                    normalized_dist = dist / bone_length_factors[b_idx]
+                else:
+                    normalized_dist = dist
+                
+                score = normalized_dist
+                
+                if self.use_projection_weight and on_segment:
+                    center_distance = abs(t_param - 0.5) * 2
+                    center_bonus = (1.0 - center_distance) * self.projection_center_bias
+                    score = score * (1.0 - center_bonus * 0.3)
+                
+                if not on_segment:
+                    score = score * 1.1
+                
+                if score < best_score:
+                    best_score = score
                     closest_bone = b_idx
             
             weights[v_idx, closest_bone] = 1.0
+        
+        return weights
+    
+    def assign_weights_precise(self, vertices, bone_heads, bone_tails, 
+                               bone_hierarchy=None, progress_callback=None):
+        """
+        精确模式的最近骨骼分配
+        考虑骨骼层级关系
+        
+        Args:
+            vertices: 顶点位置 (N, 3)
+            bone_heads: 骨骼头部位置 (M, 3)
+            bone_tails: 骨骼尾部位置 (M, 3)
+            bone_hierarchy: 骨骼父子关系 {child_idx: parent_idx}
+            progress_callback: 进度回调
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        bone_lengths = np.array([
+            np.linalg.norm(bone_tails[i] - bone_heads[i]) 
+            for i in range(num_bones)
+        ], dtype=np.float64)
+        
+        bone_centers = (bone_heads + bone_tails) / 2
+        
+        bone_radii = self.calculate_bone_radii(bone_heads, bone_tails)
+        
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            
+            bone_scores = []
+            
+            for b_idx in range(num_bones):
+                dist, closest_pt, t_param, on_segment = self.point_to_segment_info(
+                    pos, bone_heads[b_idx], bone_tails[b_idx]
+                )
+                
+                bone_len = bone_lengths[b_idx]
+                if bone_len > 1e-8:
+                    normalized_dist = dist / bone_len
+                else:
+                    normalized_dist = dist
+                
+                score = normalized_dist
+                
+                if on_segment:
+                    center_factor = 1.0 - abs(t_param - 0.5) * 0.4
+                    score = score / center_factor
+                else:
+                    score = score * 1.2
+                
+                radius_factor = dist / (bone_radii[b_idx] + 1e-8)
+                if radius_factor > 1.0:
+                    score = score * (1.0 + (radius_factor - 1.0) * 0.5)
+                
+                bone_scores.append((score, b_idx, dist, on_segment))
+            
+            bone_scores.sort(key=lambda x: x[0])
+            
+            best_bone = bone_scores[0][1]
+            
+            if bone_hierarchy and len(bone_scores) > 1:
+                best_score = bone_scores[0][0]
+                second_score = bone_scores[1][0]
+                second_bone = bone_scores[1][1]
+                
+                if second_score < best_score * 1.3:
+                    if bone_hierarchy.get(second_bone) == best_bone:
+                        best_bone = second_bone
+                    elif bone_hierarchy.get(best_bone) == second_bone:
+                        pass
+            
+            weights[v_idx, best_bone] = 1.0
         
         return weights
 
