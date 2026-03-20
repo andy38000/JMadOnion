@@ -292,17 +292,18 @@ class JointBoundaryEngine:
     def assign_weights_hybrid(self, vertices, bone_heads, bone_tails, 
                               bone_hierarchy=None, progress_callback=None):
         """
-        混合算法 - 最精确的分界
+        混合算法 - 纯关节点分割
         
-        1. 首先按骨骼中心距离粗分
-        2. 对于边界区域的顶点，使用精确的平面分割
-        3. 考虑骨骼方向一致性
+        核心原理：
+        1. 找到最近的两个骨骼
+        2. 如果它们有父子关系，用关节点平面精确分割
+        3. 平面法线 = 子骨骼方向
         """
         num_verts = len(vertices)
         num_bones = len(bone_heads)
         weights = np.zeros((num_verts, num_bones), dtype=np.float32)
         
-        # 骨骼预计算
+        # 骨骼方向
         bone_directions = bone_tails - bone_heads
         bone_lengths = np.linalg.norm(bone_directions, axis=1)
         bone_dir_normalized = np.zeros_like(bone_directions)
@@ -310,15 +311,21 @@ class JointBoundaryEngine:
             if bone_lengths[i] > 1e-8:
                 bone_dir_normalized[i] = bone_directions[i] / bone_lengths[i]
         
-        bone_centers = (bone_heads + bone_tails) / 2
-        
-        # 构建关节点信息
-        joint_info = {}
+        # 构建关节点信息 - key是(child, parent)
+        joint_planes = {}
         if bone_hierarchy:
             for child_idx, parent_idx in bone_hierarchy.items():
+                # 关节点 = 子骨骼的head
                 joint_point = bone_heads[child_idx].copy()
-                joint_info[(child_idx, parent_idx)] = joint_point
-                joint_info[(parent_idx, child_idx)] = joint_point
+                # 平面法线 = 子骨骼方向
+                plane_normal = bone_dir_normalized[child_idx].copy()
+                
+                joint_planes[(child_idx, parent_idx)] = {
+                    'point': joint_point,
+                    'normal': plane_normal,
+                    'child': child_idx,
+                    'parent': parent_idx
+                }
         
         for v_idx in range(num_verts):
             if progress_callback and v_idx % 100 == 0:
@@ -326,48 +333,42 @@ class JointBoundaryEngine:
             
             pos = vertices[v_idx]
             
-            # 计算到所有骨骼中心的距离
-            bone_scores = []
+            # 计算到所有骨骼段的距离
+            bone_dists = []
             for b_idx in range(num_bones):
-                center_dist = np.linalg.norm(pos - bone_centers[b_idx])
-                segment_dist, _ = ClosestJointEngine.point_to_segment_distance(
+                dist, _ = ClosestJointEngine.point_to_segment_distance(
                     pos, bone_heads[b_idx], bone_tails[b_idx]
                 )
+                bone_dists.append((dist, b_idx))
+            
+            bone_dists.sort(key=lambda x: x[0])
+            
+            closest = bone_dists[0][1]
+            assigned_bone = closest
+            
+            # 检查最近的两个骨骼是否有父子关系
+            if len(bone_dists) > 1:
+                second = bone_dists[1][1]
                 
-                # 综合评分：中心距离 + 段距离
-                score = center_dist * 0.6 + segment_dist * 0.4
-                bone_scores.append((score, b_idx, center_dist))
-            
-            bone_scores.sort(key=lambda x: x[0])
-            
-            best_bone = bone_scores[0][1]
-            best_score = bone_scores[0][0]
-            
-            # 如果第二名的分数很接近，需要精细判断
-            if len(bone_scores) > 1:
-                second_bone = bone_scores[1][1]
-                second_score = bone_scores[1][0]
+                # 查找这对骨骼的关节点
+                plane = None
+                for key, p in joint_planes.items():
+                    if (closest == p['child'] and second == p['parent']) or \
+                       (closest == p['parent'] and second == p['child']):
+                        plane = p
+                        break
                 
-                # 分数差距小于20%时，使用关节点分割
-                if second_score < best_score * 1.2:
-                    key = (best_bone, second_bone)
-                    if key in joint_info:
-                        joint_point = joint_info[key]
-                        
-                        # 判断在关节点的哪一侧
-                        to_vertex = pos - joint_point
-                        
-                        # 使用两个骨骼中心的连线方向作为分割方向
-                        split_dir = bone_centers[second_bone] - bone_centers[best_bone]
-                        split_dir_len = np.linalg.norm(split_dir)
-                        if split_dir_len > 1e-8:
-                            split_dir = split_dir / split_dir_len
-                            
-                            proj = np.dot(to_vertex, split_dir)
-                            if proj > 0:
-                                best_bone = second_bone
+                if plane:
+                    # 使用关节点平面分割
+                    to_vertex = pos - plane['point']
+                    signed_dist = np.dot(to_vertex, plane['normal'])
+                    
+                    if signed_dist >= 0:
+                        assigned_bone = plane['child']
+                    else:
+                        assigned_bone = plane['parent']
             
-            weights[v_idx, best_bone] = 1.0
+            weights[v_idx, assigned_bone] = 1.0
         
         return weights
     
