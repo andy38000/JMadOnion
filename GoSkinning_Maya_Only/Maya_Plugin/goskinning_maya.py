@@ -1119,6 +1119,9 @@ class GoSkinningMaya:
         # 合并网格选项
         self.merge_mesh_cb = cmds.checkBox(label='合并网格', value=False)
         
+        # 包含子骨骼选项
+        self.include_children_cb = cmds.checkBox(label='包含子骨骼 (取消勾选=只用选中的骨骼)', value=False)
+        
         cmds.separator(height=15)
         
         # 智能获取按钮
@@ -1666,6 +1669,7 @@ class GoSkinningMaya:
         model_name = cmds.optionMenu(self.model_menu, query=True, value=True)
         max_influences = cmds.intSliderGrp(self.max_influences_slider, query=True, value=True)
         merge_mesh = cmds.checkBox(self.merge_mesh_cb, query=True, value=True)
+        include_children = cmds.checkBox(self.include_children_cb, query=True, value=True)
         
         if not mesh_text:
             cmds.warning('请指定目标网格!')
@@ -1685,20 +1689,23 @@ class GoSkinningMaya:
         # 解析骨骼
         joints_input = [j.strip() for j in joint_text.split(',') if j.strip()]
         
-        # 收集所有骨骼
+        # 收集骨骼
         all_joints = []
         print('[GoSkinning] 输入骨骼: {}'.format(joints_input))
+        print('[GoSkinning] 包含子骨骼: {}'.format(include_children))
         
         for joint in joints_input:
             if cmds.objExists(joint) and cmds.objectType(joint) == 'joint':
                 all_joints.append(joint)
                 print('[GoSkinning]   添加骨骼: {}'.format(joint))
-                # 获取所有子骨骼
-                children = cmds.listRelatives(joint, allDescendents=True, type='joint') or []
-                for child in children:
-                    child_name = child.split('|')[-1]
-                    all_joints.append(child_name)
-                    print('[GoSkinning]     子骨骼: {}'.format(child_name))
+                
+                # 只有勾选了"包含子骨骼"才获取子骨骼
+                if include_children:
+                    children = cmds.listRelatives(joint, allDescendents=True, type='joint') or []
+                    for child in children:
+                        child_name = child.split('|')[-1]
+                        all_joints.append(child_name)
+                        print('[GoSkinning]     子骨骼: {}'.format(child_name))
             else:
                 print('[GoSkinning]   骨骼不存在或类型错误: {}'.format(joint))
         
