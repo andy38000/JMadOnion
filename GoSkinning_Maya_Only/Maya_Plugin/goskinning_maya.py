@@ -8,6 +8,7 @@ GoSkinning Maya - 完整版自动蒙皮插件
     - 局部蒙皮: 针对选中顶点进行局部权重计算
     - 裙摆蒙皮: 裙子等布料的代理蒙皮
     - 面部蒙皮: 面部骨骼专用蒙皮
+    - 权重工具: ngSkin风格的权重编辑工具
 """
 
 import os
@@ -23,6 +24,16 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
+# ngSkinTools 风格算法
+try:
+    from ngskin_algorithms import (
+        NGSkinAlgorithms, MeshTopology, 
+        WeightPostProcessor, create_ngskin_algorithms
+    )
+    NGSKIN_AVAILABLE = True
+except ImportError:
+    NGSKIN_AVAILABLE = False
 
 # 脚本路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +62,7 @@ class GoSkinningMaya:
         # 默认算法
         models.append('distance-based (距离算法)')
         models.append('heat-diffusion (热扩散)')
+        models.append('closest-joint (最近骨骼)')
         
         # 扫描模型文件夹
         if os.path.exists(MODEL_DIR):
@@ -63,6 +75,88 @@ class GoSkinningMaya:
             models.append('-- 无ML模型,请先训练 --')
         
         return models
+    
+    def get_mesh_topology(self, mesh):
+        """获取网格拓扑信息"""
+        if not NGSKIN_AVAILABLE:
+            return None
+        
+        num_verts = cmds.polyEvaluate(mesh, vertex=True)
+        num_edges = cmds.polyEvaluate(mesh, edge=True)
+        
+        vertices = []
+        for i in range(num_verts):
+            pos = cmds.xform('{}.vtx[{}]'.format(mesh, i), q=True, ws=True, t=True)
+            vertices.append(pos)
+        
+        edges = []
+        for i in range(num_edges):
+            edge_verts = cmds.polyInfo('{}.e[{}]'.format(mesh, i), edgeToVertex=True)
+            if edge_verts:
+                parts = edge_verts[0].split(':')[1].strip().split()
+                if len(parts) >= 2:
+                    edges.append((int(parts[0]), int(parts[1])))
+        
+        topology = MeshTopology(vertices, edges=edges)
+        topology.build_adjacency(edges=edges)
+        
+        return topology
+    
+    def get_skin_cluster_weights(self, mesh):
+        """获取现有skinCluster的权重"""
+        history = cmds.listHistory(mesh, pruneDagObjects=True) or []
+        skin_clusters = cmds.ls(history, type='skinCluster')
+        
+        if not skin_clusters:
+            return None, None, None
+        
+        skin_cluster = skin_clusters[0]
+        
+        influences = cmds.skinCluster(skin_cluster, query=True, influence=True)
+        num_verts = cmds.polyEvaluate(mesh, vertex=True)
+        num_bones = len(influences)
+        
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        for v_idx in range(num_verts):
+            for b_idx, joint in enumerate(influences):
+                w = cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
+                                    transform=joint, query=True)
+                weights[v_idx, b_idx] = w
+        
+        return skin_cluster, influences, weights
+    
+    def set_skin_cluster_weights(self, mesh, skin_cluster, influences, weights):
+        """设置skinCluster的权重"""
+        num_verts = weights.shape[0]
+        
+        cmds.progressWindow(title='应用权重',
+                           progress=0,
+                           status='应用权重: 0/{}'.format(num_verts),
+                           isInterruptable=True,
+                           maxValue=num_verts)
+        
+        try:
+            for v_idx in range(num_verts):
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    break
+                
+                if v_idx % 100 == 0:
+                    cmds.progressWindow(edit=True, 
+                                       progress=v_idx,
+                                       status='应用权重: {}/{}'.format(v_idx, num_verts))
+                
+                transform_value = []
+                for b_idx, joint in enumerate(influences):
+                    w = float(weights[v_idx, b_idx])
+                    if w > 0.001:
+                        transform_value.append((joint, w))
+                
+                if transform_value:
+                    cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
+                                    transformValue=transform_value)
+        finally:
+            cmds.progressWindow(endProgress=True)
     
     def load_ml_model(self, model_name):
         """加载ML模型"""
@@ -201,7 +295,6 @@ class GoSkinningMaya:
         num_bones = len(bone_heads)
         weights = np.zeros((num_verts, num_bones), dtype=np.float32)
         
-        # 显示进度条
         cmds.progressWindow(title='计算权重',
                            progress=0,
                            status='计算距离权重: 0/{}'.format(num_verts),
@@ -210,11 +303,9 @@ class GoSkinningMaya:
         
         try:
             for v_idx in range(num_verts):
-                # 检查取消
                 if cmds.progressWindow(query=True, isCancelled=True):
                     break
                 
-                # 更新进度
                 if v_idx % 200 == 0:
                     cmds.progressWindow(edit=True,
                                        progress=v_idx,
@@ -226,8 +317,6 @@ class GoSkinningMaya:
                 for b_idx in range(num_bones):
                     head = bone_heads[b_idx]
                     tail = bone_tails[b_idx]
-                    
-                    # 点到线段距离
                     d = self.point_to_segment_distance(pos, head, tail)
                     distances.append((d, b_idx))
                 
@@ -248,6 +337,216 @@ class GoSkinningMaya:
             cmds.progressWindow(endProgress=True)
         
         return weights
+    
+    def calculate_heat_diffusion_weights(self, mesh, vertices, bone_heads, bone_tails, max_influences=4):
+        """热扩散算法计算权重 (ngSkin风格)"""
+        if not NGSKIN_AVAILABLE:
+            print('[GoSkinning] ngSkin算法不可用，使用距离算法')
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
+        
+        alg = create_ngskin_algorithms()
+        
+        topology = self.get_mesh_topology(mesh)
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True,
+                                   progress=pct,
+                                   status='热扩散计算: {}%'.format(pct))
+        
+        cmds.progressWindow(title='热扩散算法',
+                           progress=0,
+                           status='热扩散计算...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            weights = alg.heat_diffusion_weights(
+                vertices, bone_heads, bone_tails,
+                topology=topology,
+                max_influences=max_influences,
+                diffusion_steps=5,
+                sigma=1.0,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
+    def calculate_closest_joint_weights(self, vertices, bone_heads, bone_tails):
+        """最近骨骼算法 (ngSkin风格)"""
+        if not NGSKIN_AVAILABLE:
+            print('[GoSkinning] ngSkin算法不可用，使用距离算法')
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
+        
+        alg = create_ngskin_algorithms()
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True,
+                                   progress=pct,
+                                   status='最近骨骼计算: {}%'.format(pct))
+        
+        cmds.progressWindow(title='最近骨骼算法',
+                           progress=0,
+                           status='计算最近骨骼...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            weights = alg.assign_by_closest_joint(
+                vertices, bone_heads, bone_tails,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
+    def relax_weights_ngskin(self, mesh, num_steps=20, step_size=0.1, selected_verts=None):
+        """
+        ngSkin风格权重松弛
+        
+        Args:
+            mesh: 网格名称
+            num_steps: 迭代次数
+            step_size: 步长
+            selected_verts: 选中的顶点索引列表(可选)
+        """
+        if not NGSKIN_AVAILABLE:
+            cmds.warning('ngSkin算法模块不可用!')
+            return False
+        
+        skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+        if skin_cluster is None:
+            cmds.warning('网格没有skinCluster!')
+            return False
+        
+        topology = self.get_mesh_topology(mesh)
+        if topology is None:
+            cmds.warning('无法获取网格拓扑!')
+            return False
+        
+        alg = create_ngskin_algorithms()
+        
+        vertex_mask = None
+        if selected_verts:
+            vertex_mask = np.zeros(len(weights), dtype=bool)
+            vertex_mask[selected_verts] = True
+        
+        def progress_callback(step, total):
+            pct = int(step * 100 / total) if total > 0 else 0
+            cmds.progressWindow(edit=True,
+                               progress=pct,
+                               status='松弛权重: 步骤 {}/{}'.format(step, total))
+        
+        cmds.progressWindow(title='权重松弛',
+                           progress=0,
+                           status='松弛权重...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            new_weights = alg.relax_weights(
+                weights, topology,
+                num_steps=num_steps,
+                step_size=step_size,
+                vertex_mask=vertex_mask,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        self.set_skin_cluster_weights(mesh, skin_cluster, influences, new_weights)
+        print('[GoSkinning] 权重松弛完成')
+        return True
+    
+    def make_rigid_weights_ngskin(self, mesh, single_cluster=False, selected_verts=None):
+        """
+        ngSkin风格刚性权重
+        
+        Args:
+            mesh: 网格名称
+            single_cluster: 单簇模式
+            selected_verts: 选中的顶点索引列表
+        """
+        if not NGSKIN_AVAILABLE:
+            cmds.warning('ngSkin算法模块不可用!')
+            return False
+        
+        skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+        if skin_cluster is None:
+            cmds.warning('网格没有skinCluster!')
+            return False
+        
+        topology = self.get_mesh_topology(mesh)
+        if topology is None:
+            cmds.warning('无法获取网格拓扑!')
+            return False
+        
+        alg = create_ngskin_algorithms()
+        
+        vertex_mask = None
+        if selected_verts:
+            vertex_mask = np.zeros(len(weights), dtype=bool)
+            vertex_mask[selected_verts] = True
+        
+        new_weights = alg.make_rigid_weights(
+            weights, topology,
+            single_cluster=single_cluster,
+            vertex_mask=vertex_mask
+        )
+        
+        self.set_skin_cluster_weights(mesh, skin_cluster, influences, new_weights)
+        print('[GoSkinning] 刚性权重完成')
+        return True
+    
+    def limit_weights_ngskin(self, mesh, max_influences=4):
+        """
+        ngSkin风格限制权重影响数
+        
+        Args:
+            mesh: 网格名称
+            max_influences: 最大影响数
+        """
+        if not NGSKIN_AVAILABLE:
+            cmds.warning('ngSkin算法模块不可用!')
+            return False
+        
+        skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+        if skin_cluster is None:
+            cmds.warning('网格没有skinCluster!')
+            return False
+        
+        alg = create_ngskin_algorithms()
+        
+        def progress_callback(current, total):
+            pct = int(current * 100 / total) if total > 0 else 0
+            cmds.progressWindow(edit=True,
+                               progress=pct,
+                               status='限制权重: {}%'.format(pct))
+        
+        cmds.progressWindow(title='限制权重',
+                           progress=0,
+                           status='限制权重影响数...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            new_weights = alg.limit_weights(
+                weights,
+                max_influences=max_influences,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        self.set_skin_cluster_weights(mesh, skin_cluster, influences, new_weights)
+        print('[GoSkinning] 限制权重完成，最大影响数: {}'.format(max_influences))
+        return True
     
     def point_to_segment_distance(self, point, seg_start, seg_end):
         """计算点到线段的距离"""
@@ -336,7 +635,6 @@ class GoSkinningMaya:
         print('[GoSkinning] 算法: ' + model_name)
         print('[GoSkinning] 骨骼数: ' + str(len(all_joints)))
         
-        # 显示进度条 - 准备阶段
         cmds.progressWindow(title='GoSkinning - ' + mesh,
                            progress=0,
                            status='准备数据...',
@@ -344,19 +642,17 @@ class GoSkinningMaya:
                            maxValue=100)
         
         try:
-            # 获取顶点数据
             cmds.progressWindow(edit=True, progress=10, status='获取顶点数据...')
             print('[GoSkinning] 获取顶点数据...')
             vertices, normals = self.get_mesh_data(mesh)
             print('[GoSkinning] 顶点数: ' + str(len(vertices)))
             
-            # 获取骨骼数据
             cmds.progressWindow(edit=True, progress=20, status='获取骨骼数据...')
             print('[GoSkinning] 获取骨骼数据...')
             bone_heads, bone_tails = self.get_joint_data(all_joints)
             
-            # 计算权重
             cmds.progressWindow(edit=True, progress=30, status='计算权重...')
+            
             if '(ML)' in model_name:
                 print('[GoSkinning] 使用ML模型计算权重...')
                 cmds.progressWindow(edit=True, status='加载ML模型...')
@@ -368,17 +664,29 @@ class GoSkinningMaya:
                 else:
                     cmds.progressWindow(edit=True, progress=40, status='ML预测权重...')
                     weights = self.predict_ml_weights(model, vertices, normals, bone_heads, bone_tails, max_influences)
+            
+            elif 'heat-diffusion' in model_name.lower():
+                print('[GoSkinning] 使用热扩散算法计算权重...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_heat_diffusion_weights(mesh, vertices, bone_heads, bone_tails, max_influences)
+            
+            elif 'closest-joint' in model_name.lower():
+                print('[GoSkinning] 使用最近骨骼算法计算权重...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_closest_joint_weights(vertices, bone_heads, bone_tails)
+            
             else:
                 print('[GoSkinning] 使用距离算法计算权重...')
                 cmds.progressWindow(edit=True, progress=40, status='计算距离权重...')
                 weights = self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
             
-            cmds.progressWindow(edit=True, progress=60, status='权重计算完成')
+            if cmds.progressWindow(query=True, exists=True):
+                cmds.progressWindow(edit=True, progress=60, status='权重计算完成')
             
         finally:
-            cmds.progressWindow(endProgress=True)
+            if cmds.progressWindow(query=True, exists=True):
+                cmds.progressWindow(endProgress=True)
         
-        # 应用权重 (有自己的进度条)
         print('[GoSkinning] 应用权重...')
         self.apply_weights(mesh, all_joints, weights)
         
@@ -540,12 +848,96 @@ class GoSkinningMaya:
         
         cmds.setParent('..')
         
+        # ========== 权重工具 Tab (ngSkin风格) ==========
+        tools_tab = cmds.columnLayout(adjustableColumn=True, rowSpacing=5,
+                                      columnOffset=['both', 10])
+        
+        cmds.separator(height=5, style='none')
+        cmds.text(label='权重工具 - ngSkin风格算法', align='left', font='boldLabelFont')
+        cmds.separator(height=5)
+        
+        # === 权重松弛 ===
+        relax_frame = cmds.frameLayout(label='权重松弛 (Relax)', collapsable=True,
+                                       borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        cmds.text(label='迭代次数:', align='left')
+        self.relax_steps_slider = cmds.intSliderGrp(field=True, minValue=1, maxValue=100,
+                                                     value=20, width=400)
+        
+        cmds.text(label='步长 (0-1):', align='left')
+        self.relax_step_size_slider = cmds.floatSliderGrp(field=True, minValue=0.01, maxValue=1.0,
+                                                          value=0.1, precision=2, width=400)
+        
+        cmds.button(label='松弛选中网格权重', height=35,
+                   backgroundColor=[0.3, 0.4, 0.5],
+                   command=lambda x: self.execute_relax_weights())
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # === 刚性权重 ===
+        rigid_frame = cmds.frameLayout(label='刚性权重 (Rigid)', collapsable=True,
+                                       borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        cmds.text(label='将连通区域的权重统一化', align='left')
+        self.rigid_single_cluster_cb = cmds.checkBox(label='单簇模式 (所有选中顶点为一个簇)', value=False)
+        
+        cmds.button(label='刚性化选中网格权重', height=35,
+                   backgroundColor=[0.4, 0.35, 0.4],
+                   command=lambda x: self.execute_rigid_weights())
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # === 限制权重 ===
+        limit_frame = cmds.frameLayout(label='限制影响数 (Limit)', collapsable=True,
+                                       borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        cmds.text(label='最大骨骼影响数:', align='left')
+        self.limit_max_slider = cmds.intSliderGrp(field=True, minValue=1, maxValue=8,
+                                                   value=4, width=400)
+        
+        cmds.button(label='限制选中网格权重', height=35,
+                   backgroundColor=[0.45, 0.35, 0.3],
+                   command=lambda x: self.execute_limit_weights())
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # === 修剪权重 ===
+        prune_frame = cmds.frameLayout(label='修剪权重 (Prune)', collapsable=True,
+                                       borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
+        
+        cmds.text(label='阈值 (小于此值的权重设为0):', align='left')
+        self.prune_threshold_field = cmds.floatField(value=0.01, minValue=0.001, maxValue=0.5,
+                                                     precision=3, width=100)
+        
+        cmds.button(label='修剪选中网格权重', height=35,
+                   backgroundColor=[0.35, 0.4, 0.35],
+                   command=lambda x: self.execute_prune_weights())
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # 状态显示
+        cmds.separator(height=10)
+        ngskin_status = 'ngSkin算法: 可用' if NGSKIN_AVAILABLE else 'ngSkin算法: 不可用 (缺少模块)'
+        cmds.text(label=ngskin_status, font='smallObliqueLabelFont',
+                 backgroundColor=[0.25, 0.35, 0.25] if NGSKIN_AVAILABLE else [0.4, 0.3, 0.3])
+        
+        cmds.setParent('..')
+        
         # 设置Tab标签
         cmds.tabLayout(tabs, edit=True, 
                       tabLabel=[(global_tab, '全局蒙皮'),
                                (local_tab, '局部蒙皮'),
                                (skirt_tab, '裙摆蒙皮'),
-                               (face_tab, '面部蒙皮')])
+                               (face_tab, '面部蒙皮'),
+                               (tools_tab, '权重工具')])
         
         cmds.setParent(main_layout)
         
@@ -751,6 +1143,143 @@ class GoSkinningMaya:
     def execute_face_skin(self):
         """执行面部蒙皮"""
         cmds.warning('面部蒙皮功能开发中...')
+    
+    def get_selected_mesh_for_tools(self):
+        """获取选中的网格（用于权重工具）"""
+        sel = cmds.ls(selection=True, long=True)
+        
+        for obj in sel:
+            shapes = cmds.listRelatives(obj, shapes=True, type='mesh', fullPath=True)
+            if shapes:
+                return obj.split('|')[-1]
+            
+            if cmds.objectType(obj) == 'mesh':
+                parent = cmds.listRelatives(obj, parent=True)
+                if parent:
+                    return parent[0]
+        
+        components = cmds.filterExpand(sel, selectionMask=31)  # vertex
+        if components:
+            mesh = components[0].split('.')[0]
+            return mesh
+        
+        return None
+    
+    def get_selected_vertex_indices(self):
+        """获取选中的顶点索引"""
+        sel = cmds.ls(selection=True, flatten=True)
+        
+        vertices = cmds.filterExpand(sel, selectionMask=31)  # vertex mask
+        if not vertices:
+            return None
+        
+        indices = []
+        for v in vertices:
+            idx_str = v.split('[')[-1].rstrip(']')
+            try:
+                indices.append(int(idx_str))
+            except:
+                pass
+        
+        return indices if indices else None
+    
+    def execute_relax_weights(self):
+        """执行权重松弛"""
+        mesh = self.get_selected_mesh_for_tools()
+        if not mesh:
+            cmds.warning('请先选择一个带有skinCluster的网格!')
+            return
+        
+        num_steps = cmds.intSliderGrp(self.relax_steps_slider, query=True, value=True)
+        step_size = cmds.floatSliderGrp(self.relax_step_size_slider, query=True, value=True)
+        
+        selected_verts = self.get_selected_vertex_indices()
+        
+        try:
+            success = self.relax_weights_ngskin(mesh, num_steps, step_size, selected_verts)
+            if success:
+                vert_info = '所有顶点' if not selected_verts else '{} 个选中顶点'.format(len(selected_verts))
+                cmds.confirmDialog(title='完成', 
+                                  message='权重松弛完成!\n网格: {}\n{}'.format(mesh, vert_info),
+                                  button=['OK'])
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            cmds.confirmDialog(title='错误', message='松弛失败: ' + str(e), button=['OK'])
+    
+    def execute_rigid_weights(self):
+        """执行刚性权重"""
+        mesh = self.get_selected_mesh_for_tools()
+        if not mesh:
+            cmds.warning('请先选择一个带有skinCluster的网格!')
+            return
+        
+        single_cluster = cmds.checkBox(self.rigid_single_cluster_cb, query=True, value=True)
+        
+        selected_verts = self.get_selected_vertex_indices()
+        
+        try:
+            success = self.make_rigid_weights_ngskin(mesh, single_cluster, selected_verts)
+            if success:
+                mode = '单簇模式' if single_cluster else '自动簇模式'
+                cmds.confirmDialog(title='完成', 
+                                  message='刚性权重完成!\n网格: {}\n模式: {}'.format(mesh, mode),
+                                  button=['OK'])
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            cmds.confirmDialog(title='错误', message='刚性化失败: ' + str(e), button=['OK'])
+    
+    def execute_limit_weights(self):
+        """执行限制权重"""
+        mesh = self.get_selected_mesh_for_tools()
+        if not mesh:
+            cmds.warning('请先选择一个带有skinCluster的网格!')
+            return
+        
+        max_influences = cmds.intSliderGrp(self.limit_max_slider, query=True, value=True)
+        
+        try:
+            success = self.limit_weights_ngskin(mesh, max_influences)
+            if success:
+                cmds.confirmDialog(title='完成', 
+                                  message='限制权重完成!\n网格: {}\n最大影响数: {}'.format(mesh, max_influences),
+                                  button=['OK'])
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            cmds.confirmDialog(title='错误', message='限制失败: ' + str(e), button=['OK'])
+    
+    def execute_prune_weights(self):
+        """执行修剪权重"""
+        mesh = self.get_selected_mesh_for_tools()
+        if not mesh:
+            cmds.warning('请先选择一个带有skinCluster的网格!')
+            return
+        
+        threshold = cmds.floatField(self.prune_threshold_field, query=True, value=True)
+        
+        if not NGSKIN_AVAILABLE:
+            cmds.warning('ngSkin算法模块不可用!')
+            return
+        
+        try:
+            skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+            if skin_cluster is None:
+                cmds.warning('网格没有skinCluster!')
+                return
+            
+            new_weights = WeightPostProcessor.prune(weights, threshold)
+            
+            self.set_skin_cluster_weights(mesh, skin_cluster, influences, new_weights)
+            
+            cmds.confirmDialog(title='完成', 
+                              message='修剪权重完成!\n网格: {}\n阈值: {}'.format(mesh, threshold),
+                              button=['OK'])
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            cmds.confirmDialog(title='错误', message='修剪失败: ' + str(e), button=['OK'])
 
 
 # 全局实例
