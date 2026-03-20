@@ -1,0 +1,24 @@
+# GoSkinning ML Training 依赖
+# Python 3.8+
+
+# 深度学习框架 (选择一个安装)
+# GPU版本 (推荐):
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# CPU版本:
+# pip install torch torchvision
+
+torch>=1.12.0
+torchvision>=0.13.0
+
+# 数据处理
+numpy>=1.21.0
+
+# 可视化和监控
+tensorboard>=2.10.0
+matplotlib>=3.5.0
+
+# 进度条
+tqdm>=4.64.0
+
+# 可选: 加速数据加载
+# h5py>=3.7.0
