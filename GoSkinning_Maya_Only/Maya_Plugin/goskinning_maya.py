@@ -62,7 +62,8 @@ class GoSkinningMaya:
         # 默认算法
         models.append('distance-based (距离算法)')
         models.append('heat-diffusion (热扩散)')
-        models.append('closest-joint (最近骨骼)')
+        models.append('closest-joint (最近骨骼-无过渡)')
+        models.append('closest-joint+smooth (最近骨骼+平滑)')
         
         # 扫描模型文件夹
         if os.path.exists(MODEL_DIR):
@@ -375,8 +376,18 @@ class GoSkinningMaya:
         
         return weights
     
-    def calculate_closest_joint_weights(self, vertices, bone_heads, bone_tails):
-        """最近骨骼算法 (ngSkin风格)"""
+    def calculate_closest_joint_weights(self, vertices, bone_heads, bone_tails, 
+                                         smooth_iterations=0, smooth_step=0.15):
+        """
+        最近骨骼算法 (ngSkin风格)
+        
+        Args:
+            vertices: 顶点位置
+            bone_heads: 骨骼头部位置
+            bone_tails: 骨骼尾部位置
+            smooth_iterations: 平滑迭代次数 (0=不平滑)
+            smooth_step: 平滑步长
+        """
         if not NGSKIN_AVAILABLE:
             print('[GoSkinning] ngSkin算法不可用，使用距离算法')
             return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
@@ -401,6 +412,73 @@ class GoSkinningMaya:
                 vertices, bone_heads, bone_tails,
                 progress_callback=progress_callback
             )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        return weights
+    
+    def calculate_closest_joint_with_smooth(self, mesh, vertices, bone_heads, bone_tails,
+                                            smooth_iterations=20, smooth_step=0.15):
+        """
+        最近骨骼算法 + 自动平滑
+        
+        Args:
+            mesh: 网格名称(用于获取拓扑)
+            vertices: 顶点位置
+            bone_heads: 骨骼头部位置
+            bone_tails: 骨骼尾部位置
+            smooth_iterations: 平滑迭代次数
+            smooth_step: 平滑步长
+        """
+        if not NGSKIN_AVAILABLE:
+            print('[GoSkinning] ngSkin算法不可用，使用距离算法')
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 4)
+        
+        alg = create_ngskin_algorithms()
+        
+        # 第1步: 最近骨骼分配
+        cmds.progressWindow(title='最近骨骼+平滑',
+                           progress=0,
+                           status='计算最近骨骼...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            def progress1(current, total):
+                if total > 0:
+                    pct = int(current * 50 / total)
+                    cmds.progressWindow(edit=True, progress=pct,
+                                       status='最近骨骼: {}%'.format(pct * 2))
+            
+            weights = alg.assign_by_closest_joint(
+                vertices, bone_heads, bone_tails,
+                progress_callback=progress1
+            )
+            
+            # 第2步: 平滑权重
+            if smooth_iterations > 0:
+                cmds.progressWindow(edit=True, progress=50, status='获取网格拓扑...')
+                topology = self.get_mesh_topology(mesh)
+                
+                if topology:
+                    def progress2(step, total):
+                        if total > 0:
+                            pct = 50 + int(step * 50 / total)
+                            cmds.progressWindow(edit=True, progress=pct,
+                                               status='平滑权重: 步骤 {}/{}'.format(step, total))
+                    
+                    weights = alg.relax_weights(
+                        weights, topology,
+                        num_steps=smooth_iterations,
+                        step_size=smooth_step,
+                        progress_callback=progress2
+                    )
+                    print('[GoSkinning] 已应用 {} 次平滑迭代'.format(smooth_iterations))
+                else:
+                    print('[GoSkinning] 警告: 无法获取拓扑，跳过平滑')
+            
+            cmds.progressWindow(edit=True, progress=100, status='完成')
+            
         finally:
             cmds.progressWindow(endProgress=True)
         
@@ -670,8 +748,16 @@ class GoSkinningMaya:
                 cmds.progressWindow(endProgress=True)
                 weights = self.calculate_heat_diffusion_weights(mesh, vertices, bone_heads, bone_tails, max_influences)
             
+            elif 'closest-joint+smooth' in model_name.lower():
+                print('[GoSkinning] 使用最近骨骼+平滑算法计算权重...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_closest_joint_with_smooth(
+                    mesh, vertices, bone_heads, bone_tails,
+                    smooth_iterations=30, smooth_step=0.15
+                )
+            
             elif 'closest-joint' in model_name.lower():
-                print('[GoSkinning] 使用最近骨骼算法计算权重...')
+                print('[GoSkinning] 使用最近骨骼算法计算权重(无平滑)...')
                 cmds.progressWindow(endProgress=True)
                 weights = self.calculate_closest_joint_weights(vertices, bone_heads, bone_tails)
             
