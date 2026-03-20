@@ -271,7 +271,7 @@ class GoSkinningMaya:
             transform_value = []
             
             for b_idx in range(len(joints)):
-                w = vert_weights[b_idx]
+                w = float(vert_weights[b_idx])  # 转换为Python float
                 if w > 0.001:
                     transform_value.append((joints[b_idx], w))
             
