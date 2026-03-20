@@ -201,31 +201,51 @@ class GoSkinningMaya:
         num_bones = len(bone_heads)
         weights = np.zeros((num_verts, num_bones), dtype=np.float32)
         
-        for v_idx in range(num_verts):
-            pos = vertices[v_idx]
-            distances = []
-            
-            for b_idx in range(num_bones):
-                head = bone_heads[b_idx]
-                tail = bone_tails[b_idx]
+        # 显示进度条
+        cmds.progressWindow(title='计算权重',
+                           progress=0,
+                           status='计算距离权重: 0/{}'.format(num_verts),
+                           isInterruptable=True,
+                           maxValue=num_verts)
+        
+        try:
+            for v_idx in range(num_verts):
+                # 检查取消
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    break
                 
-                # 点到线段距离
-                d = self.point_to_segment_distance(pos, head, tail)
-                distances.append((d, b_idx))
-            
-            distances.sort()
-            closest = distances[:max_influences]
-            
-            total = 0
-            w_list = []
-            for dist, b_idx in closest:
-                w = 1.0 / (dist + 0.001)
-                w_list.append((b_idx, w))
-                total += w
-            
-            if total > 0:
-                for b_idx, w in w_list:
-                    weights[v_idx, b_idx] = w / total
+                # 更新进度
+                if v_idx % 200 == 0:
+                    cmds.progressWindow(edit=True,
+                                       progress=v_idx,
+                                       status='计算距离权重: {}/{}'.format(v_idx, num_verts))
+                
+                pos = vertices[v_idx]
+                distances = []
+                
+                for b_idx in range(num_bones):
+                    head = bone_heads[b_idx]
+                    tail = bone_tails[b_idx]
+                    
+                    # 点到线段距离
+                    d = self.point_to_segment_distance(pos, head, tail)
+                    distances.append((d, b_idx))
+                
+                distances.sort()
+                closest = distances[:max_influences]
+                
+                total = 0
+                w_list = []
+                for dist, b_idx in closest:
+                    w = 1.0 / (dist + 0.001)
+                    w_list.append((b_idx, w))
+                    total += w
+                
+                if total > 0:
+                    for b_idx, w in w_list:
+                        weights[v_idx, b_idx] = w / total
+        finally:
+            cmds.progressWindow(endProgress=True)
         
         return weights
     
@@ -263,21 +283,40 @@ class GoSkinningMaya:
         
         num_verts = weights.shape[0]
         
-        for v_idx in range(num_verts):
-            if v_idx % 500 == 0:
-                print('[GoSkinning] 应用权重: {}/{}'.format(v_idx, num_verts))
-            
-            vert_weights = weights[v_idx]
-            transform_value = []
-            
-            for b_idx in range(len(joints)):
-                w = float(vert_weights[b_idx])  # 转换为Python float
-                if w > 0.001:
-                    transform_value.append((joints[b_idx], w))
-            
-            if transform_value:
-                cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
-                                transformValue=transform_value)
+        # 显示进度条
+        cmds.progressWindow(title='GoSkinning',
+                           progress=0,
+                           status='应用权重: 0/{}'.format(num_verts),
+                           isInterruptable=True,
+                           maxValue=num_verts)
+        
+        try:
+            for v_idx in range(num_verts):
+                # 检查是否取消
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    print('[GoSkinning] 用户取消操作')
+                    break
+                
+                # 更新进度条
+                if v_idx % 100 == 0:
+                    cmds.progressWindow(edit=True, 
+                                       progress=v_idx,
+                                       status='应用权重: {}/{}'.format(v_idx, num_verts))
+                
+                vert_weights = weights[v_idx]
+                transform_value = []
+                
+                for b_idx in range(len(joints)):
+                    w = float(vert_weights[b_idx])  # 转换为Python float
+                    if w > 0.001:
+                        transform_value.append((joints[b_idx], w))
+                
+                if transform_value:
+                    cmds.skinPercent(skin_cluster, '{}.vtx[{}]'.format(mesh, v_idx),
+                                    transformValue=transform_value)
+        finally:
+            # 关闭进度条
+            cmds.progressWindow(endProgress=True)
         
         return skin_cluster
     
@@ -297,29 +336,49 @@ class GoSkinningMaya:
         print('[GoSkinning] 算法: ' + model_name)
         print('[GoSkinning] 骨骼数: ' + str(len(all_joints)))
         
-        # 获取顶点数据
-        print('[GoSkinning] 获取顶点数据...')
-        vertices, normals = self.get_mesh_data(mesh)
-        print('[GoSkinning] 顶点数: ' + str(len(vertices)))
+        # 显示进度条 - 准备阶段
+        cmds.progressWindow(title='GoSkinning - ' + mesh,
+                           progress=0,
+                           status='准备数据...',
+                           isInterruptable=False,
+                           maxValue=100)
         
-        # 获取骨骼数据
-        print('[GoSkinning] 获取骨骼数据...')
-        bone_heads, bone_tails = self.get_joint_data(all_joints)
-        
-        # 计算权重
-        if '(ML)' in model_name:
-            print('[GoSkinning] 使用ML模型计算权重...')
-            model = self.load_ml_model(model_name)
-            if model is None:
-                cmds.warning('ML模型加载失败,切换到距离算法')
-                weights = self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
+        try:
+            # 获取顶点数据
+            cmds.progressWindow(edit=True, progress=10, status='获取顶点数据...')
+            print('[GoSkinning] 获取顶点数据...')
+            vertices, normals = self.get_mesh_data(mesh)
+            print('[GoSkinning] 顶点数: ' + str(len(vertices)))
+            
+            # 获取骨骼数据
+            cmds.progressWindow(edit=True, progress=20, status='获取骨骼数据...')
+            print('[GoSkinning] 获取骨骼数据...')
+            bone_heads, bone_tails = self.get_joint_data(all_joints)
+            
+            # 计算权重
+            cmds.progressWindow(edit=True, progress=30, status='计算权重...')
+            if '(ML)' in model_name:
+                print('[GoSkinning] 使用ML模型计算权重...')
+                cmds.progressWindow(edit=True, status='加载ML模型...')
+                model = self.load_ml_model(model_name)
+                if model is None:
+                    cmds.warning('ML模型加载失败,切换到距离算法')
+                    cmds.progressWindow(edit=True, progress=40, status='计算距离权重...')
+                    weights = self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
+                else:
+                    cmds.progressWindow(edit=True, progress=40, status='ML预测权重...')
+                    weights = self.predict_ml_weights(model, vertices, normals, bone_heads, bone_tails, max_influences)
             else:
-                weights = self.predict_ml_weights(model, vertices, normals, bone_heads, bone_tails, max_influences)
-        else:
-            print('[GoSkinning] 使用距离算法计算权重...')
-            weights = self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
+                print('[GoSkinning] 使用距离算法计算权重...')
+                cmds.progressWindow(edit=True, progress=40, status='计算距离权重...')
+                weights = self.calculate_distance_weights(vertices, bone_heads, bone_tails, max_influences)
+            
+            cmds.progressWindow(edit=True, progress=60, status='权重计算完成')
+            
+        finally:
+            cmds.progressWindow(endProgress=True)
         
-        # 应用权重
+        # 应用权重 (有自己的进度条)
         print('[GoSkinning] 应用权重...')
         self.apply_weights(mesh, all_joints, weights)
         
