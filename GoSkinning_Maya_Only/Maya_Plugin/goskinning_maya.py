@@ -1283,11 +1283,59 @@ class GoSkinningMaya:
                                       columnOffset=['both', 10])
         
         cmds.separator(height=5, style='none')
-        cmds.text(label='权重工具 - ngSkin风格算法', align='left', font='boldLabelFont')
+        cmds.text(label='权重工具 - 检查/修复/编辑', align='left', font='boldLabelFont')
         cmds.separator(height=5)
         
+        # === 骨骼选择工具 ===
+        bone_frame = cmds.frameLayout(label='骨骼工具', collapsable=True, collapse=False,
+                                      borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=3)
+        
+        cmds.button(label='选择蒙皮骨骼 (选中模型后点击)', height=30,
+                   backgroundColor=[0.35, 0.4, 0.45],
+                   command=lambda x: self.select_skin_joints())
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # === 权重检查工具 ===
+        check_frame = cmds.frameLayout(label='权重检查', collapsable=True, collapse=False,
+                                       borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=3)
+        
+        check_row = cmds.rowLayout(numberOfColumns=4, columnWidth4=(100, 50, 100, 100))
+        cmds.text(label='最大影响数:')
+        self.check_max_infl = cmds.intField(value=4, minValue=1, maxValue=8, width=40)
+        cmds.button(label='检查超限顶点', width=90,
+                   command=lambda x: self.check_weight_influences())
+        cmds.button(label='打印所有', width=80,
+                   command=lambda x: self.print_all_influences())
+        cmds.setParent('..')
+        
+        # 检查结果显示
+        self.check_result_text = cmds.text(label='', align='left')
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
+        # === 修复权重影响数 ===
+        fix_frame = cmds.frameLayout(label='修复权重影响数', collapsable=True, collapse=False,
+                                     borderStyle='etchedIn', marginWidth=5, marginHeight=5)
+        cmds.columnLayout(adjustableColumn=True, rowSpacing=3)
+        
+        fix_row = cmds.rowLayout(numberOfColumns=3, columnWidth3=(120, 50, 200))
+        cmds.text(label='修复为最大影响:')
+        self.fix_max_infl = cmds.intField(value=4, minValue=1, maxValue=8, width=40)
+        cmds.button(label='执行修复 (整个模型)', width=150,
+                   backgroundColor=[0.5, 0.4, 0.3],
+                   command=lambda x: self.fix_max_influences())
+        cmds.setParent('..')
+        
+        cmds.setParent('..')
+        cmds.setParent('..')
+        
         # === 权重松弛 ===
-        relax_frame = cmds.frameLayout(label='权重松弛 (Relax)', collapsable=True,
+        relax_frame = cmds.frameLayout(label='权重松弛 (Relax)', collapsable=True, collapse=True,
                                        borderStyle='etchedIn', marginWidth=5, marginHeight=5)
         cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
         
@@ -1307,7 +1355,7 @@ class GoSkinningMaya:
         cmds.setParent('..')
         
         # === 刚性权重 ===
-        rigid_frame = cmds.frameLayout(label='刚性权重 (Rigid)', collapsable=True,
+        rigid_frame = cmds.frameLayout(label='刚性权重 (Rigid)', collapsable=True, collapse=True,
                                        borderStyle='etchedIn', marginWidth=5, marginHeight=5)
         cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
         
@@ -1322,7 +1370,7 @@ class GoSkinningMaya:
         cmds.setParent('..')
         
         # === 限制权重 ===
-        limit_frame = cmds.frameLayout(label='限制影响数 (Limit)', collapsable=True,
+        limit_frame = cmds.frameLayout(label='限制影响数 (Limit)', collapsable=True, collapse=True,
                                        borderStyle='etchedIn', marginWidth=5, marginHeight=5)
         cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
         
@@ -1338,7 +1386,7 @@ class GoSkinningMaya:
         cmds.setParent('..')
         
         # === 修剪权重 ===
-        prune_frame = cmds.frameLayout(label='修剪权重 (Prune)', collapsable=True,
+        prune_frame = cmds.frameLayout(label='修剪权重 (Prune)', collapsable=True, collapse=True,
                                        borderStyle='etchedIn', marginWidth=5, marginHeight=5)
         cmds.columnLayout(adjustableColumn=True, rowSpacing=5)
         
@@ -1970,6 +2018,212 @@ class GoSkinningMaya:
             import traceback
             traceback.print_exc()
             cmds.confirmDialog(title='错误', message='限制失败: ' + str(e), button=['OK'])
+    
+    def select_skin_joints(self):
+        """选择蒙皮骨骼 - 选中模型的所有影响骨骼"""
+        sel = cmds.ls(selection=True)
+        if not sel:
+            cmds.warning('请先选择一个蒙皮模型!')
+            return
+        
+        for mesh in sel:
+            skin_cluster = cmds.ls(cmds.listHistory(mesh), type='skinCluster')
+            if not skin_cluster:
+                cmds.warning('{}没有找到skinCluster'.format(mesh))
+                continue
+            
+            influences = cmds.skinCluster(skin_cluster[0], query=True, influence=True)
+            if influences:
+                cmds.select(influences, replace=True)
+                print('[GoSkinning] 选中了 {} 根蒙皮骨骼'.format(len(influences)))
+                
+                # 显示骨骼列表窗口
+                self.show_joints_window(influences)
+            else:
+                cmds.warning('没有找到影响骨骼')
+    
+    def show_joints_window(self, joints):
+        """显示骨骼列表窗口"""
+        if cmds.window('skinJointListWin', exists=True):
+            cmds.deleteUI('skinJointListWin')
+        
+        cmds.window('skinJointListWin', title='蒙皮骨骼列表', widthHeight=(300, 400))
+        cmds.columnLayout(adjustableColumn=True)
+        
+        cmds.text(label='共 {} 根骨骼:'.format(len(joints)), font='boldLabelFont', height=25)
+        cmds.separator(height=5)
+        
+        joint_text = '\n'.join(joints)
+        cmds.scrollField(text=joint_text, editable=False, wordWrap=False, height=330)
+        
+        cmds.button(label='关闭', command=lambda x: cmds.deleteUI('skinJointListWin'))
+        cmds.showWindow('skinJointListWin')
+    
+    def check_weight_influences(self):
+        """检查超过最大影响数的顶点"""
+        max_infl = cmds.intField(self.check_max_infl, query=True, value=True)
+        
+        sel = cmds.ls(selection=True, flatten=True)
+        if not sel:
+            cmds.warning('请选择顶点或模型!')
+            return
+        
+        # 判断是顶点还是模型
+        if '.vtx[' in sel[0]:
+            vertices = sel
+            mesh = sel[0].split('.')[0]
+        else:
+            mesh = sel[0]
+            num_verts = cmds.polyEvaluate(mesh, vertex=True)
+            vertices = ['{}.vtx[{}]'.format(mesh, i) for i in range(num_verts)]
+        
+        skin_cluster = cmds.ls(cmds.listHistory(mesh), type='skinCluster')
+        if not skin_cluster:
+            cmds.warning('没有找到skinCluster!')
+            return
+        skin_cluster = skin_cluster[0]
+        
+        # 检查每个顶点
+        over_limit_verts = []
+        
+        cmds.progressWindow(title='检查权重', progress=0, status='检查中...',
+                           isInterruptable=True, maxValue=len(vertices))
+        
+        try:
+            for i, vtx in enumerate(vertices):
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    break
+                if i % 100 == 0:
+                    cmds.progressWindow(edit=True, progress=i)
+                
+                weights = cmds.skinPercent(skin_cluster, vtx, query=True, value=True)
+                count = sum(1 for w in weights if w > 0)
+                
+                if count > max_infl:
+                    vtx_idx = vtx.split('[')[-1].rstrip(']')
+                    over_limit_verts.append((vtx_idx, count))
+                    print('顶点 {} 拥有 {} 根骨骼权重影响'.format(vtx_idx, count))
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        # 选中超限顶点
+        if over_limit_verts:
+            cmds.select(clear=True)
+            for vtx_idx, count in over_limit_verts:
+                cmds.select('{}.vtx[{}]'.format(mesh, vtx_idx), add=True)
+            
+            msg = '找到 {} 个顶点超过 {} 根骨骼影响'.format(len(over_limit_verts), max_infl)
+            cmds.text(self.check_result_text, edit=True, label=msg,
+                     backgroundColor=[0.5, 0.3, 0.3])
+            print('[GoSkinning] ' + msg)
+        else:
+            msg = '所有顶点都在 {} 根骨骼影响以内'.format(max_infl)
+            cmds.text(self.check_result_text, edit=True, label=msg,
+                     backgroundColor=[0.3, 0.5, 0.3])
+            print('[GoSkinning] ' + msg)
+    
+    def print_all_influences(self):
+        """打印所有选中顶点的影响数"""
+        sel = cmds.ls(selection=True, flatten=True)
+        if not sel:
+            cmds.warning('请选择顶点!')
+            return
+        
+        if '.vtx[' not in sel[0]:
+            cmds.warning('请选择顶点!')
+            return
+        
+        mesh = sel[0].split('.')[0]
+        skin_cluster = cmds.ls(cmds.listHistory(mesh), type='skinCluster')
+        if not skin_cluster:
+            cmds.warning('没有找到skinCluster!')
+            return
+        skin_cluster = skin_cluster[0]
+        
+        print('[GoSkinning] ========== 顶点影响数 ==========')
+        for vtx in sel:
+            weights = cmds.skinPercent(skin_cluster, vtx, query=True, value=True)
+            count = sum(1 for w in weights if w > 0)
+            vtx_idx = vtx.split('[')[-1].rstrip(']')
+            print('顶点 {} 拥有 {} 根骨骼权重影响'.format(vtx_idx, count))
+        print('[GoSkinning] ================================')
+    
+    def fix_max_influences(self):
+        """修复整个模型的最大影响数"""
+        max_infl = cmds.intField(self.fix_max_infl, query=True, value=True)
+        
+        sel = cmds.ls(selection=True)
+        if not sel:
+            cmds.warning('请选择模型!')
+            return
+        
+        for mesh in sel:
+            skin_cluster = cmds.ls(cmds.listHistory(mesh), type='skinCluster')
+            if not skin_cluster:
+                cmds.warning('{}没有找到skinCluster'.format(mesh))
+                continue
+            skin_cluster = skin_cluster[0]
+            
+            num_verts = cmds.polyEvaluate(mesh, vertex=True)
+            fixed_count = 0
+            
+            cmds.progressWindow(title='修复权重', progress=0,
+                               status='修复中: 0/{}'.format(num_verts),
+                               isInterruptable=True, maxValue=num_verts)
+            
+            try:
+                for v_idx in range(num_verts):
+                    if cmds.progressWindow(query=True, isCancelled=True):
+                        break
+                    if v_idx % 50 == 0:
+                        cmds.progressWindow(edit=True, progress=v_idx,
+                                           status='修复中: {}/{}'.format(v_idx, num_verts))
+                    
+                    vtx = '{}.vtx[{}]'.format(mesh, v_idx)
+                    
+                    # 获取所有骨骼和权重
+                    bones = cmds.skinPercent(skin_cluster, vtx, query=True, transform=None)
+                    weights_dict = {}
+                    
+                    for bone in bones:
+                        w = cmds.skinPercent(skin_cluster, vtx, transform=bone, query=True)
+                        if w > 0:
+                            weights_dict[bone] = w
+                    
+                    # 如果超过限制，移除最小的
+                    if len(weights_dict) > max_infl:
+                        fixed_count += 1
+                        
+                        while len(weights_dict) > max_infl:
+                            # 找到最小权重的骨骼
+                            min_bone = min(weights_dict, key=weights_dict.get)
+                            min_weight = weights_dict[min_bone]
+                            
+                            # 将最小权重分配给其他骨骼
+                            del weights_dict[min_bone]
+                            
+                            # 重新归一化
+                            total = sum(weights_dict.values())
+                            if total > 0:
+                                for bone in weights_dict:
+                                    weights_dict[bone] /= total
+                            
+                            # 设置权重
+                            cmds.skinPercent(skin_cluster, vtx,
+                                           transformValue=[(min_bone, 0)])
+                        
+                        # 应用修复后的权重
+                        tv_list = [(bone, w) for bone, w in weights_dict.items()]
+                        cmds.skinPercent(skin_cluster, vtx, transformValue=tv_list)
+                        
+            finally:
+                cmds.progressWindow(endProgress=True)
+            
+            print('[GoSkinning] 修复了 {} 个顶点'.format(fixed_count))
+            cmds.confirmDialog(title='完成',
+                              message='修复完成!\n模型: {}\n修复顶点: {}\n最大影响: {}'.format(
+                                  mesh, fixed_count, max_infl),
+                              button=['OK'])
     
     def execute_prune_weights(self):
         """执行修剪权重"""
