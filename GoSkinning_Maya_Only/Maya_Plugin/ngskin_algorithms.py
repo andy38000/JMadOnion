@@ -298,6 +298,7 @@ class JointBoundaryEngine:
         1. 找到最近的两个骨骼
         2. 如果它们有父子关系，用关节点平面精确分割
         3. 平面法线 = 子骨骼方向
+        4. 特殊处理末端骨骼
         """
         num_verts = len(vertices)
         num_bones = len(bone_heads)
@@ -311,13 +312,19 @@ class JointBoundaryEngine:
             if bone_lengths[i] > 1e-8:
                 bone_dir_normalized[i] = bone_directions[i] / bone_lengths[i]
         
-        # 构建关节点信息 - key是(child, parent)
+        # 标识末端骨骼（没有子骨骼的骨骼）
+        end_bones = set(range(num_bones))
+        if bone_hierarchy:
+            for child_idx, parent_idx in bone_hierarchy.items():
+                end_bones.discard(parent_idx)  # 有子骨骼的不是末端骨骼
+        
+        print('[ngskin] 末端骨骼索引: {}'.format(end_bones))
+        
+        # 构建关节点信息
         joint_planes = {}
         if bone_hierarchy:
             for child_idx, parent_idx in bone_hierarchy.items():
-                # 关节点 = 子骨骼的head
                 joint_point = bone_heads[child_idx].copy()
-                # 平面法线 = 子骨骼方向
                 plane_normal = bone_dir_normalized[child_idx].copy()
                 
                 joint_planes[(child_idx, parent_idx)] = {
@@ -346,27 +353,34 @@ class JointBoundaryEngine:
             closest = bone_dists[0][1]
             assigned_bone = closest
             
-            # 检查最近的两个骨骼是否有父子关系
-            if len(bone_dists) > 1:
-                second = bone_dists[1][1]
-                
-                # 查找这对骨骼的关节点
-                plane = None
-                for key, p in joint_planes.items():
-                    if (closest == p['child'] and second == p['parent']) or \
-                       (closest == p['parent'] and second == p['child']):
-                        plane = p
-                        break
-                
-                if plane:
-                    # 使用关节点平面分割
-                    to_vertex = pos - plane['point']
-                    signed_dist = np.dot(to_vertex, plane['normal'])
+            # 检查前几个最近的骨骼，寻找有父子关系的组合
+            found_plane = False
+            for i in range(min(3, len(bone_dists))):
+                if found_plane:
+                    break
+                for j in range(i + 1, min(4, len(bone_dists))):
+                    bone_a = bone_dists[i][1]
+                    bone_b = bone_dists[j][1]
                     
-                    if signed_dist >= 0:
-                        assigned_bone = plane['child']
-                    else:
-                        assigned_bone = plane['parent']
+                    # 查找这对骨骼的关节点
+                    plane = None
+                    for key, p in joint_planes.items():
+                        if (bone_a == p['child'] and bone_b == p['parent']) or \
+                           (bone_a == p['parent'] and bone_b == p['child']):
+                            plane = p
+                            break
+                    
+                    if plane:
+                        # 使用关节点平面分割
+                        to_vertex = pos - plane['point']
+                        signed_dist = np.dot(to_vertex, plane['normal'])
+                        
+                        if signed_dist >= 0:
+                            assigned_bone = plane['child']
+                        else:
+                            assigned_bone = plane['parent']
+                        found_plane = True
+                        break
             
             weights[v_idx, assigned_bone] = 1.0
         
