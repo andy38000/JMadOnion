@@ -1702,7 +1702,6 @@ class GoSkinningMaya:
         # 获取选中的网格
         mesh = self.get_selected_mesh_for_tools()
         if not mesh:
-            # 尝试从输入框获取
             mesh_text = cmds.textField(self.mesh_field, query=True, text=True)
             if mesh_text:
                 mesh = mesh_text.split(',')[0].strip()
@@ -1714,6 +1713,10 @@ class GoSkinningMaya:
             cmds.warning('网格不存在: {}'.format(mesh))
             return
         
+        if not NGSKIN_AVAILABLE:
+            cmds.warning('ngSkin算法模块不可用!')
+            return
+        
         print('[GoSkinning] ========== 快速权重松弛 ==========')
         print('[GoSkinning] 网格: {}'.format(mesh))
         print('[GoSkinning] 迭代次数: {}'.format(num_steps))
@@ -1722,32 +1725,49 @@ class GoSkinningMaya:
         print('[GoSkinning] 最大影响数: {}'.format(max_influences))
         
         try:
-            # 第1步: 松弛
-            print('[GoSkinning] 步骤1: 权重松弛...')
-            success = self.relax_weights_ngskin(mesh, num_steps, step_size)
+            # 获取当前权重
+            skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+            if skin_cluster is None:
+                cmds.warning('网格没有skinCluster!')
+                return
             
-            if success:
-                # 第2步: 修剪小权重
-                print('[GoSkinning] 步骤2: 修剪小权重 (< {})...'.format(prune_threshold))
-                if NGSKIN_AVAILABLE:
-                    skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
-                    if skin_cluster:
-                        # 修剪
-                        weights[weights < prune_threshold] = 0.0
-                        
-                        # 第3步: 限制影响数
-                        print('[GoSkinning] 步骤3: 限制影响数 (最大 {})...'.format(max_influences))
-                        alg = create_ngskin_algorithms()
-                        weights = alg.limit_weights(weights, max_influences=max_influences)
-                        
-                        # 应用
-                        self.set_skin_cluster_weights(mesh, skin_cluster, influences, weights)
-                
-                print('[GoSkinning] ========== 完成 ==========')
-                cmds.confirmDialog(title='完成',
-                                  message='权重处理完成!\n网格: {}\n松弛: {} 次\n修剪: < {}\n最大影响: {}'.format(
-                                      mesh, num_steps, prune_threshold, max_influences),
-                                  button=['OK'])
+            topology = self.get_mesh_topology(mesh)
+            if topology is None:
+                cmds.warning('无法获取网格拓扑!')
+                return
+            
+            alg = create_ngskin_algorithms()
+            
+            # 第1步: 松弛
+            print('[GoSkinning] 步骤1: 权重松弛 ({} 次)...'.format(num_steps))
+            weights = alg.relax_weights(weights, topology, num_steps=num_steps, step_size=step_size)
+            
+            # 第2步: 修剪小权重
+            print('[GoSkinning] 步骤2: 修剪小权重 (< {})...'.format(prune_threshold))
+            weights[weights < prune_threshold] = 0.0
+            # 归一化
+            row_sums = weights.sum(axis=1, keepdims=True)
+            row_sums = np.maximum(row_sums, 1e-8)
+            weights = weights / row_sums
+            
+            # 第3步: 限制影响数
+            print('[GoSkinning] 步骤3: 限制影响数 (最大 {})...'.format(max_influences))
+            weights = alg.limit_weights(weights, max_influences=max_influences)
+            
+            # 验证
+            max_infl_check = (weights > 0).sum(axis=1).max()
+            print('[GoSkinning] 验证: 最大影响数 = {}'.format(max_infl_check))
+            
+            # 应用权重
+            print('[GoSkinning] 应用权重...')
+            self.set_skin_cluster_weights(mesh, skin_cluster, influences, weights)
+            
+            print('[GoSkinning] ========== 完成 ==========')
+            cmds.confirmDialog(title='完成',
+                              message='权重处理完成!\n网格: {}\n松弛: {} 次\n修剪: < {}\n最大影响: {} (实际: {})'.format(
+                                  mesh, num_steps, prune_threshold, max_influences, int(max_infl_check)),
+                              button=['OK'])
+                              
         except Exception as e:
             import traceback
             traceback.print_exc()
