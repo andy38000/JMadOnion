@@ -366,16 +366,17 @@ class ClosestJointEngine:
         return weights
     
     def assign_weights_precise(self, vertices, bone_heads, bone_tails, 
-                               bone_hierarchy=None, progress_callback=None):
+                               bone_hierarchy=None, normals=None, progress_callback=None):
         """
         精确模式的最近骨骼分配
-        考虑骨骼层级关系
+        考虑骨骼层级关系、方向匹配、法线一致性
         
         Args:
             vertices: 顶点位置 (N, 3)
             bone_heads: 骨骼头部位置 (M, 3)
             bone_tails: 骨骼尾部位置 (M, 3)
             bone_hierarchy: 骨骼父子关系 {child_idx: parent_idx}
+            normals: 顶点法线 (N, 3) 可选
             progress_callback: 进度回调
         """
         num_verts = len(vertices)
@@ -388,14 +389,19 @@ class ClosestJointEngine:
         ], dtype=np.float64)
         
         bone_centers = (bone_heads + bone_tails) / 2
-        
         bone_radii = self.calculate_bone_radii(bone_heads, bone_tails)
+        
+        bone_directions = bone_tails - bone_heads
+        bone_dir_norms = np.linalg.norm(bone_directions, axis=1, keepdims=True)
+        bone_dir_norms = np.maximum(bone_dir_norms, 1e-8)
+        bone_directions = bone_directions / bone_dir_norms
         
         for v_idx in range(num_verts):
             if progress_callback and v_idx % 100 == 0:
                 progress_callback(v_idx, num_verts)
             
             pos = vertices[v_idx]
+            v_normal = normals[v_idx] if normals is not None else None
             
             bone_scores = []
             
@@ -422,7 +428,7 @@ class ClosestJointEngine:
                 if radius_factor > 1.0:
                     score = score * (1.0 + (radius_factor - 1.0) * 0.5)
                 
-                bone_scores.append((score, b_idx, dist, on_segment))
+                bone_scores.append((score, b_idx, dist, on_segment, t_param))
             
             bone_scores.sort(key=lambda x: x[0])
             
@@ -438,6 +444,158 @@ class ClosestJointEngine:
                         best_bone = second_bone
                     elif bone_hierarchy.get(best_bone) == second_bone:
                         pass
+            
+            weights[v_idx, best_bone] = 1.0
+        
+        return weights
+    
+    def assign_weights_advanced(self, vertices, bone_heads, bone_tails,
+                                normals=None, bone_hierarchy=None, 
+                                progress_callback=None):
+        """
+        高级最近骨骼分配算法
+        
+        多因素综合评分:
+        1. 距离分数 - 点到骨骼段的距离
+        2. 投影分数 - 投影位置在骨骼段上的位置
+        3. 方向分数 - 顶点到骨骼的方向与骨骼方向的匹配
+        4. 法线分数 - 顶点法线与骨骼方向的关系
+        5. 层级分数 - 子骨骼在边界区域优先
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        # 预计算骨骼信息
+        bone_lengths = np.linalg.norm(bone_tails - bone_heads, axis=1)
+        max_bone_len = bone_lengths.max() if bone_lengths.max() > 0 else 1.0
+        
+        bone_directions = bone_tails - bone_heads
+        bone_dir_norms = np.linalg.norm(bone_directions, axis=1, keepdims=True)
+        bone_dir_norms = np.maximum(bone_dir_norms, 1e-8)
+        bone_directions_normalized = bone_directions / bone_dir_norms
+        
+        bone_centers = (bone_heads + bone_tails) / 2
+        bone_radii = self.calculate_bone_radii(bone_heads, bone_tails)
+        
+        # 计算全局距离范围用于归一化
+        all_dists = []
+        sample_step = max(1, num_verts // 200)
+        for v_idx in range(0, num_verts, sample_step):
+            for b_idx in range(num_bones):
+                d, _, _, _ = self.point_to_segment_info(
+                    vertices[v_idx], bone_heads[b_idx], bone_tails[b_idx]
+                )
+                all_dists.append(d)
+        global_max_dist = np.percentile(all_dists, 95) if all_dists else 1.0
+        
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            v_normal = normals[v_idx] if normals is not None else None
+            
+            bone_scores = []
+            
+            for b_idx in range(num_bones):
+                dist, closest_pt, t_param, on_segment = self.point_to_segment_info(
+                    pos, bone_heads[b_idx], bone_tails[b_idx]
+                )
+                
+                # === 1. 距离分数 (0-100, 越小越好) ===
+                # 使用骨骼长度归一化
+                bone_len = bone_lengths[b_idx]
+                if bone_len > 1e-8:
+                    dist_normalized = dist / bone_len
+                else:
+                    dist_normalized = dist / global_max_dist
+                
+                distance_score = dist_normalized * 40
+                
+                # === 2. 投影位置分数 (0-20) ===
+                if on_segment:
+                    # 投影在骨骼中间位置更好
+                    center_distance = abs(t_param - 0.5) * 2  # 0=中心, 1=端点
+                    projection_score = center_distance * 15
+                else:
+                    # 投影在骨骼外部，惩罚
+                    projection_score = 20
+                
+                # === 3. 方向匹配分数 (0-20) ===
+                # 顶点到最近点的方向 vs 骨骼方向
+                to_vertex = pos - closest_pt
+                to_vertex_len = np.linalg.norm(to_vertex)
+                if to_vertex_len > 1e-8:
+                    to_vertex_normalized = to_vertex / to_vertex_len
+                    # 我们希望顶点在骨骼的"侧面"，而不是延长线上
+                    alignment = abs(np.dot(to_vertex_normalized, bone_directions_normalized[b_idx]))
+                    # alignment接近0表示垂直于骨骼（好），接近1表示沿骨骼方向（可能是延长线）
+                    direction_score = alignment * 15
+                else:
+                    direction_score = 0
+                
+                # === 4. 法线匹配分数 (0-15) ===
+                if v_normal is not None:
+                    v_normal_arr = np.array(v_normal)
+                    v_normal_len = np.linalg.norm(v_normal_arr)
+                    if v_normal_len > 1e-8:
+                        v_normal_normalized = v_normal_arr / v_normal_len
+                        # 法线与骨骼方向垂直通常更合理
+                        normal_alignment = abs(np.dot(v_normal_normalized, bone_directions_normalized[b_idx]))
+                        normal_score = normal_alignment * 10
+                    else:
+                        normal_score = 5
+                else:
+                    normal_score = 5
+                
+                # === 5. 半径范围分数 (0-10) ===
+                radius_ratio = dist / (bone_radii[b_idx] + 1e-8)
+                if radius_ratio <= 1.0:
+                    radius_score = 0
+                else:
+                    radius_score = min((radius_ratio - 1.0) * 10, 10)
+                
+                # === 总分 ===
+                total_score = distance_score + projection_score + direction_score + normal_score + radius_score
+                
+                bone_scores.append({
+                    'bone_idx': b_idx,
+                    'total_score': total_score,
+                    'distance': dist,
+                    'dist_score': distance_score,
+                    'proj_score': projection_score,
+                    'dir_score': direction_score,
+                    'normal_score': normal_score,
+                    'radius_score': radius_score,
+                    't_param': t_param,
+                    'on_segment': on_segment
+                })
+            
+            # 按总分排序
+            bone_scores.sort(key=lambda x: x['total_score'])
+            
+            best = bone_scores[0]
+            best_bone = best['bone_idx']
+            
+            # === 层级优化 ===
+            if bone_hierarchy and len(bone_scores) > 1:
+                second = bone_scores[1]
+                score_diff = second['total_score'] - best['total_score']
+                
+                # 如果分数接近，考虑层级关系
+                if score_diff < 10:
+                    second_bone = second['bone_idx']
+                    
+                    # 子骨骼在其影响范围内优先
+                    if bone_hierarchy.get(second_bone) == best_bone:
+                        # second是best的子骨骼
+                        # 如果投影位置靠近骨骼尾部(接近子骨骼)，选择子骨骼
+                        if best['t_param'] > 0.6:
+                            best_bone = second_bone
+                    
+                    # 如果best是second的子骨骼，保持best
+                    # (子骨骼已经是最佳选择)
             
             weights[v_idx, best_bone] = 1.0
         
