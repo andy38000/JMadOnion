@@ -60,6 +60,7 @@ class GoSkinningMaya:
         models = []
         
         # 默认算法
+        models.append('joint-boundary-precise (关节分界-精确)')
         models.append('joint-boundary (关节点分界)')
         models.append('spherical-influence (球形影响)')
         models.append('closest-joint-advanced (最近骨骼-高级)')
@@ -595,6 +596,51 @@ class GoSkinningMaya:
         print('[GoSkinning] 关节分界完成')
         return weights
     
+    def calculate_joint_boundary_precise_weights(self, vertices, normals, bone_heads, bone_tails, joints):
+        """
+        精确关节分界算法
+        多因素综合: 平面分界 + 距离比例 + 投影位置 + 法线方向
+        """
+        if not NGSKIN_AVAILABLE:
+            print('[GoSkinning] ngSkin算法不可用，使用距离算法')
+            return self.calculate_distance_weights(vertices, bone_heads, bone_tails, 1)
+        
+        from ngskin_algorithms import JointBoundaryEngine
+        
+        engine = JointBoundaryEngine()
+        
+        hierarchy = self.get_bone_hierarchy(joints)
+        print('[GoSkinning] 骨骼层级: {} 对父子关系'.format(len(hierarchy)))
+        
+        for child, parent in hierarchy.items():
+            print('[GoSkinning]   {} -> {} (子->父)'.format(joints[child], joints[parent]))
+        
+        def progress_callback(current, total):
+            if total > 0:
+                pct = int(current * 100 / total)
+                cmds.progressWindow(edit=True,
+                                   progress=pct,
+                                   status='精确分界: {}%'.format(pct))
+        
+        cmds.progressWindow(title='精确关节分界',
+                           progress=0,
+                           status='多因素计算中...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            weights = engine.assign_weights_by_boundary_precise(
+                vertices, bone_heads, bone_tails,
+                bone_hierarchy=hierarchy,
+                normals=normals,
+                progress_callback=progress_callback
+            )
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        print('[GoSkinning] 精确关节分界完成')
+        return weights
+    
     def calculate_spherical_influence_weights(self, vertices, bone_heads, bone_tails, joints):
         """
         球形影响区域算法
@@ -966,6 +1012,13 @@ class GoSkinningMaya:
                 print('[GoSkinning] 使用热扩散算法计算权重...')
                 cmds.progressWindow(endProgress=True)
                 weights = self.calculate_heat_diffusion_weights(mesh, vertices, bone_heads, bone_tails, max_influences)
+            
+            elif 'joint-boundary-precise' in model_name.lower():
+                print('[GoSkinning] 使用精确关节分界算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_joint_boundary_precise_weights(
+                    vertices, normals, bone_heads, bone_tails, all_joints
+                )
             
             elif 'joint-boundary' in model_name.lower():
                 print('[GoSkinning] 使用关节点分界算法...')
