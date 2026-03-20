@@ -1060,6 +1060,122 @@ class GoSkinningMaya:
         
         return skin_cluster
     
+    def do_merged_skin(self, meshes, all_joints, model_name, max_influences):
+        """
+        合并网格蒙皮 - 多个网格一起计算权重
+        
+        优点：
+        1. 相邻网格边界处权重更平滑
+        2. 计算效率更高
+        3. 整体效果更一致
+        """
+        print('[GoSkinning] ========== 合并网格蒙皮 ==========')
+        print('[GoSkinning] 网格数量: {}'.format(len(meshes)))
+        print('[GoSkinning] 骨骼数量: {}'.format(len(all_joints)))
+        
+        # 记录每个网格的顶点数量，用于后续分配权重
+        mesh_vertex_counts = []
+        mesh_vertex_offsets = []
+        current_offset = 0
+        
+        all_vertices = []
+        all_normals = []
+        
+        cmds.progressWindow(title='合并网格蒙皮',
+                           progress=0,
+                           status='收集网格数据...',
+                           isInterruptable=False,
+                           maxValue=100)
+        
+        try:
+            # 收集所有网格的顶点数据
+            for i, mesh in enumerate(meshes):
+                print('[GoSkinning] 收集网格 {}/{}: {}'.format(i+1, len(meshes), mesh))
+                vertices, normals = self.get_mesh_data(mesh)
+                
+                mesh_vertex_counts.append(len(vertices))
+                mesh_vertex_offsets.append(current_offset)
+                current_offset += len(vertices)
+                
+                all_vertices.append(vertices)
+                all_normals.append(normals)
+            
+            # 合并所有顶点
+            combined_vertices = np.vstack(all_vertices)
+            combined_normals = np.vstack(all_normals)
+            
+            print('[GoSkinning] 合并后总顶点数: {}'.format(len(combined_vertices)))
+            
+            cmds.progressWindow(edit=True, progress=20, status='获取骨骼数据...')
+            
+            # 获取骨骼数据
+            bone_heads, bone_tails = self.get_joint_data(all_joints)
+            
+            cmds.progressWindow(edit=True, progress=30, status='计算权重...')
+            
+            # 计算权重
+            if 'hybrid' in model_name.lower():
+                print('[GoSkinning] 使用混合算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_hybrid_weights(combined_vertices, bone_heads, bone_tails, all_joints)
+            elif 'voronoi' in model_name.lower():
+                print('[GoSkinning] 使用Voronoi算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_voronoi_weights(combined_vertices, bone_heads, bone_tails, all_joints)
+            elif 'joint-boundary-precise' in model_name.lower():
+                print('[GoSkinning] 使用精确关节分界算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_joint_boundary_precise_weights(
+                    combined_vertices, combined_normals, bone_heads, bone_tails, all_joints
+                )
+            elif 'joint-boundary' in model_name.lower():
+                print('[GoSkinning] 使用关节分界算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_joint_boundary_weights(
+                    combined_vertices, bone_heads, bone_tails, all_joints
+                )
+            elif 'closest-joint' in model_name.lower():
+                print('[GoSkinning] 使用最近骨骼算法...')
+                cmds.progressWindow(endProgress=True)
+                weights = self.calculate_closest_joint_weights(combined_vertices, bone_heads, bone_tails)
+            elif 'heat-diffusion' in model_name.lower():
+                print('[GoSkinning] 使用热扩散算法...')
+                cmds.progressWindow(endProgress=True)
+                # 热扩散需要特殊处理，因为它依赖网格拓扑
+                # 这里退化为分别处理每个网格
+                print('[GoSkinning] 热扩散算法不支持合并网格模式，将分别处理')
+                for mesh in meshes:
+                    self.do_global_skin_with_joints(mesh, all_joints, model_name, max_influences, False)
+                return
+            else:
+                print('[GoSkinning] 使用距离算法...')
+                cmds.progressWindow(edit=True, progress=40, status='计算距离权重...')
+                weights = self.calculate_distance_weights(combined_vertices, bone_heads, bone_tails, max_influences)
+            
+            if cmds.progressWindow(query=True, exists=True):
+                cmds.progressWindow(edit=True, progress=60, status='应用权重...')
+            
+            # 分配权重到各个网格
+            for i, mesh in enumerate(meshes):
+                offset = mesh_vertex_offsets[i]
+                count = mesh_vertex_counts[i]
+                mesh_weights = weights[offset:offset+count]
+                
+                print('[GoSkinning] 应用权重到网格 {}/{}: {} (顶点 {}-{})'.format(
+                    i+1, len(meshes), mesh, offset, offset+count-1))
+                
+                self.apply_weights(mesh, all_joints, mesh_weights)
+            
+            if cmds.progressWindow(query=True, exists=True):
+                cmds.progressWindow(edit=True, progress=100, status='完成')
+            
+        finally:
+            if cmds.progressWindow(query=True, exists=True):
+                cmds.progressWindow(endProgress=True)
+        
+        print('[GoSkinning] ========== 合并蒙皮完成 ==========')
+        cmds.select(meshes)
+    
     def do_global_skin(self, mesh, root_joint, model_name, max_influences, merge_mesh):
         """执行全局蒙皮（从根骨骼获取所有骨骼）"""
         # 获取所有骨骼
@@ -1224,8 +1340,8 @@ class GoSkinningMaya:
         
         cmds.separator(height=5, style='none')
         
-        # 合并网格选项
-        self.merge_mesh_cb = cmds.checkBox(label='合并网格', value=False)
+        # 合并网格选项（多个网格一起计算权重，边界更平滑）
+        self.merge_mesh_cb = cmds.checkBox(label='合并网格 (多网格时边界更平滑)', value=True)
         
         # 包含子骨骼选项
         self.include_children_cb = cmds.checkBox(label='包含子骨骼 (取消勾选=只用选中的骨骼)', value=False)
@@ -2165,20 +2281,33 @@ class GoSkinningMaya:
             return
         
         print('[GoSkinning] 将处理 {} 个网格, {} 个骨骼'.format(len(meshes), len(all_joints)))
+        print('[GoSkinning] 合并网格模式: {}'.format(merge_mesh))
         
         try:
-            success_count = 0
-            for mesh in meshes:
-                if cmds.objExists(mesh):
+            # 检查网格是否存在
+            valid_meshes = [m for m in meshes if cmds.objExists(m)]
+            if not valid_meshes:
+                cmds.warning('没有有效的网格!')
+                return
+            
+            if merge_mesh and len(valid_meshes) > 1:
+                # 合并网格模式：多个网格一起计算权重
+                print('[GoSkinning] ===== 合并网格模式 =====')
+                self.do_merged_skin(valid_meshes, all_joints, model_name, max_influences)
+                cmds.confirmDialog(title='完成', 
+                                  message='合并蒙皮完成!\n处理了 {} 个网格'.format(len(valid_meshes)), 
+                                  button=['OK'])
+            else:
+                # 单独处理每个网格
+                success_count = 0
+                for mesh in valid_meshes:
                     print('[GoSkinning] 处理网格: ' + mesh)
                     self.do_global_skin_with_joints(mesh, all_joints, model_name, max_influences, merge_mesh)
                     success_count += 1
-                else:
-                    print('[GoSkinning] 网格不存在: ' + mesh)
-            
-            cmds.confirmDialog(title='完成', 
-                              message='全局蒙皮完成!\n处理了 {} 个网格'.format(success_count), 
-                              button=['OK'])
+                
+                cmds.confirmDialog(title='完成', 
+                                  message='全局蒙皮完成!\n处理了 {} 个网格'.format(success_count), 
+                                  button=['OK'])
         except Exception as e:
             import traceback
             traceback.print_exc()
