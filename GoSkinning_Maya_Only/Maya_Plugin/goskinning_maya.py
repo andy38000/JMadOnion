@@ -1171,6 +1171,27 @@ class GoSkinningMaya:
                    backgroundColor=[0.3, 0.5, 0.3],
                    command=lambda x: self.execute_global_skin())
         
+        cmds.separator(height=15)
+        
+        # === 后处理工具 ===
+        cmds.text(label='后处理工具:', align='left', font='boldLabelFont')
+        cmds.separator(height=5, style='none')
+        
+        # Relax 参数行
+        relax_row = cmds.rowLayout(numberOfColumns=4, columnWidth4=(100, 80, 100, 120))
+        cmds.text(label='松弛次数:')
+        self.quick_relax_steps = cmds.intField(value=10, minValue=1, maxValue=100, width=60)
+        cmds.text(label='  步长:')
+        self.quick_relax_step_size = cmds.floatField(value=0.15, minValue=0.01, maxValue=1.0, precision=2, width=60)
+        cmds.setParent('..')
+        
+        cmds.separator(height=5, style='none')
+        
+        # Relax 按钮
+        cmds.button(label='权重松弛 (Relax) - 平滑选中网格的权重边界', height=35,
+                   backgroundColor=[0.4, 0.45, 0.5],
+                   command=lambda x: self.quick_relax_selected())
+        
         cmds.setParent('..')
         
         # ========== 局部蒙皮 Tab ==========
@@ -1661,6 +1682,43 @@ class GoSkinningMaya:
             cmds.textField(self.skirt_joint_field, edit=True, text=sel[0])
         else:
             cmds.warning('请先选择一个骨骼')
+    
+    def quick_relax_selected(self):
+        """快速松弛选中网格的权重"""
+        # 获取参数
+        num_steps = cmds.intField(self.quick_relax_steps, query=True, value=True)
+        step_size = cmds.floatField(self.quick_relax_step_size, query=True, value=True)
+        
+        # 获取选中的网格
+        mesh = self.get_selected_mesh_for_tools()
+        if not mesh:
+            # 尝试从输入框获取
+            mesh_text = cmds.textField(self.mesh_field, query=True, text=True)
+            if mesh_text:
+                mesh = mesh_text.split(',')[0].strip()
+            else:
+                cmds.warning('请先选择一个网格或在输入框中指定!')
+                return
+        
+        if not cmds.objExists(mesh):
+            cmds.warning('网格不存在: {}'.format(mesh))
+            return
+        
+        print('[GoSkinning] ========== 快速权重松弛 ==========')
+        print('[GoSkinning] 网格: {}'.format(mesh))
+        print('[GoSkinning] 迭代次数: {}'.format(num_steps))
+        print('[GoSkinning] 步长: {}'.format(step_size))
+        
+        try:
+            success = self.relax_weights_ngskin(mesh, num_steps, step_size)
+            if success:
+                cmds.confirmDialog(title='完成',
+                                  message='权重松弛完成!\n网格: {}\n迭代: {} 次'.format(mesh, num_steps),
+                                  button=['OK'])
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            cmds.confirmDialog(title='错误', message='松弛失败: ' + str(e), button=['OK'])
     
     def execute_global_skin(self):
         """执行全局蒙皮"""
