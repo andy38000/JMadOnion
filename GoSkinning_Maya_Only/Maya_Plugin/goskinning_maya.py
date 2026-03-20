@@ -1185,10 +1185,18 @@ class GoSkinningMaya:
         self.quick_relax_step_size = cmds.floatField(value=0.30, minValue=0.01, maxValue=1.0, precision=2, width=60)
         cmds.setParent('..')
         
+        # 后处理参数行
+        post_row = cmds.rowLayout(numberOfColumns=4, columnWidth4=(100, 80, 100, 80))
+        cmds.text(label='修剪阈值:')
+        self.quick_prune_threshold = cmds.floatField(value=0.01, minValue=0.001, maxValue=0.1, precision=3, width=60)
+        cmds.text(label='  最大影响:')
+        self.quick_max_influences = cmds.intField(value=4, minValue=1, maxValue=8, width=60)
+        cmds.setParent('..')
+        
         cmds.separator(height=5, style='none')
         
         # Relax 按钮
-        cmds.button(label='权重松弛 (Relax) - 平滑选中网格的权重边界', height=35,
+        cmds.button(label='权重松弛 (Relax) - 平滑+修剪+限制影响数', height=35,
                    backgroundColor=[0.4, 0.45, 0.5],
                    command=lambda x: self.quick_relax_selected())
         
@@ -1684,10 +1692,12 @@ class GoSkinningMaya:
             cmds.warning('请先选择一个骨骼')
     
     def quick_relax_selected(self):
-        """快速松弛选中网格的权重"""
+        """快速松弛选中网格的权重 + 修剪 + 限制影响数"""
         # 获取参数
         num_steps = cmds.intField(self.quick_relax_steps, query=True, value=True)
         step_size = cmds.floatField(self.quick_relax_step_size, query=True, value=True)
+        prune_threshold = cmds.floatField(self.quick_prune_threshold, query=True, value=True)
+        max_influences = cmds.intField(self.quick_max_influences, query=True, value=True)
         
         # 获取选中的网格
         mesh = self.get_selected_mesh_for_tools()
@@ -1708,17 +1718,40 @@ class GoSkinningMaya:
         print('[GoSkinning] 网格: {}'.format(mesh))
         print('[GoSkinning] 迭代次数: {}'.format(num_steps))
         print('[GoSkinning] 步长: {}'.format(step_size))
+        print('[GoSkinning] 修剪阈值: {}'.format(prune_threshold))
+        print('[GoSkinning] 最大影响数: {}'.format(max_influences))
         
         try:
+            # 第1步: 松弛
+            print('[GoSkinning] 步骤1: 权重松弛...')
             success = self.relax_weights_ngskin(mesh, num_steps, step_size)
+            
             if success:
+                # 第2步: 修剪小权重
+                print('[GoSkinning] 步骤2: 修剪小权重 (< {})...'.format(prune_threshold))
+                if NGSKIN_AVAILABLE:
+                    skin_cluster, influences, weights = self.get_skin_cluster_weights(mesh)
+                    if skin_cluster:
+                        # 修剪
+                        weights[weights < prune_threshold] = 0.0
+                        
+                        # 第3步: 限制影响数
+                        print('[GoSkinning] 步骤3: 限制影响数 (最大 {})...'.format(max_influences))
+                        alg = create_ngskin_algorithms()
+                        weights = alg.limit_weights(weights, max_influences=max_influences)
+                        
+                        # 应用
+                        self.set_skin_cluster_weights(mesh, skin_cluster, influences, weights)
+                
+                print('[GoSkinning] ========== 完成 ==========')
                 cmds.confirmDialog(title='完成',
-                                  message='权重松弛完成!\n网格: {}\n迭代: {} 次'.format(mesh, num_steps),
+                                  message='权重处理完成!\n网格: {}\n松弛: {} 次\n修剪: < {}\n最大影响: {}'.format(
+                                      mesh, num_steps, prune_threshold, max_influences),
                                   button=['OK'])
         except Exception as e:
             import traceback
             traceback.print_exc()
-            cmds.confirmDialog(title='错误', message='松弛失败: ' + str(e), button=['OK'])
+            cmds.confirmDialog(title='错误', message='处理失败: ' + str(e), button=['OK'])
     
     def execute_global_skin(self):
         """执行全局蒙皮"""
