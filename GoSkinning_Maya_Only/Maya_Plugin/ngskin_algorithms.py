@@ -79,6 +79,169 @@ class MeshTopology:
                     self.neighbor_distances[i][j] = distances[j]
 
 
+class JointBoundaryEngine:
+    """
+    关节点分界引擎
+    在骨骼连接点处使用平面分割，实现精确的骨骼分区
+    
+    原理:
+        对于每对父子骨骼，在连接点处创建分界平面
+        顶点根据在平面的哪一侧来决定属于哪个骨骼
+    """
+    
+    def __init__(self):
+        self.use_smooth_boundary = False
+        self.boundary_offset = 0.0  # 分界面偏移
+        
+    def assign_weights_by_boundary(self, vertices, bone_heads, bone_tails, 
+                                    bone_hierarchy=None, progress_callback=None):
+        """
+        基于关节边界的权重分配
+        
+        对于有父子关系的骨骼:
+        - 在关节连接点创建分界平面
+        - 平面法线 = 子骨骼方向
+        - 顶点在平面上方 -> 子骨骼
+        - 顶点在平面下方 -> 父骨骼
+        
+        Args:
+            vertices: 顶点位置 (N, 3)
+            bone_heads: 骨骼头部位置 (M, 3)
+            bone_tails: 骨骼尾部位置 (M, 3)
+            bone_hierarchy: 骨骼父子关系 {child_idx: parent_idx}
+            progress_callback: 进度回调
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        # 计算骨骼方向
+        bone_directions = bone_tails - bone_heads
+        bone_lengths = np.linalg.norm(bone_directions, axis=1)
+        bone_dir_normalized = np.zeros_like(bone_directions)
+        for i in range(num_bones):
+            if bone_lengths[i] > 1e-8:
+                bone_dir_normalized[i] = bone_directions[i] / bone_lengths[i]
+        
+        # 计算骨骼中心点
+        bone_centers = (bone_heads + bone_tails) / 2
+        
+        # 构建分界平面列表
+        # 每个平面定义为 (点, 法线, 上方骨骼idx, 下方骨骼idx)
+        boundary_planes = []
+        
+        if bone_hierarchy:
+            for child_idx, parent_idx in bone_hierarchy.items():
+                # 分界点 = 子骨骼的head（也就是连接点）
+                boundary_point = bone_heads[child_idx].copy()
+                
+                # 分界面法线 = 子骨骼方向
+                boundary_normal = bone_dir_normalized[child_idx].copy()
+                
+                # 可以添加偏移
+                if self.boundary_offset != 0:
+                    boundary_point = boundary_point + boundary_normal * self.boundary_offset
+                
+                boundary_planes.append({
+                    'point': boundary_point,
+                    'normal': boundary_normal,
+                    'above_bone': child_idx,  # 平面上方（沿法线方向）属于子骨骼
+                    'below_bone': parent_idx   # 平面下方属于父骨骼
+                })
+        
+        # 为每个顶点分配骨骼
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            
+            # 首先找到距离最近的骨骼（作为默认）
+            min_dist = float('inf')
+            closest_bone = 0
+            
+            for b_idx in range(num_bones):
+                # 点到骨骼中心的距离
+                dist = np.linalg.norm(pos - bone_centers[b_idx])
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_bone = b_idx
+            
+            assigned_bone = closest_bone
+            
+            # 检查所有分界平面
+            for plane in boundary_planes:
+                # 计算顶点相对于平面的位置
+                to_vertex = pos - plane['point']
+                signed_dist = np.dot(to_vertex, plane['normal'])
+                
+                # 如果顶点涉及这对父子骨骼
+                if closest_bone == plane['above_bone'] or closest_bone == plane['below_bone']:
+                    if signed_dist >= 0:
+                        assigned_bone = plane['above_bone']
+                    else:
+                        assigned_bone = plane['below_bone']
+                    break
+            
+            weights[v_idx, assigned_bone] = 1.0
+        
+        return weights
+    
+    def assign_weights_spherical(self, vertices, bone_heads, bone_tails,
+                                  bone_hierarchy=None, progress_callback=None):
+        """
+        球形影响区域的权重分配
+        
+        对于末端骨骼（没有子骨骼的），使用以head为中心的球形影响区域
+        对于中间骨骼，使用线段距离
+        
+        这样可以让Head骨骼影响整个头部球形区域
+        """
+        num_verts = len(vertices)
+        num_bones = len(bone_heads)
+        weights = np.zeros((num_verts, num_bones), dtype=np.float32)
+        
+        # 找出末端骨骼（没有子骨骼的）
+        end_bones = set(range(num_bones))
+        if bone_hierarchy:
+            for child_idx in bone_hierarchy.keys():
+                parent_idx = bone_hierarchy[child_idx]
+                end_bones.discard(parent_idx)  # 有子骨骼的不是末端
+        
+        # 计算骨骼长度
+        bone_lengths = np.linalg.norm(bone_tails - bone_heads, axis=1)
+        
+        for v_idx in range(num_verts):
+            if progress_callback and v_idx % 100 == 0:
+                progress_callback(v_idx, num_verts)
+            
+            pos = vertices[v_idx]
+            min_score = float('inf')
+            best_bone = 0
+            
+            for b_idx in range(num_bones):
+                if b_idx in end_bones:
+                    # 末端骨骼：使用球形距离（到head的距离）
+                    dist = np.linalg.norm(pos - bone_heads[b_idx])
+                    # 归一化（使用估计的影响半径）
+                    influence_radius = bone_lengths[b_idx] * 2 if bone_lengths[b_idx] > 0 else 10.0
+                    score = dist / influence_radius
+                else:
+                    # 中间骨骼：使用线段距离
+                    dist, _ = ClosestJointEngine.point_to_segment_distance(
+                        pos, bone_heads[b_idx], bone_tails[b_idx]
+                    )
+                    score = dist / (bone_lengths[b_idx] + 1e-8)
+                
+                if score < min_score:
+                    min_score = score
+                    best_bone = b_idx
+            
+            weights[v_idx, best_bone] = 1.0
+        
+        return weights
+
+
 class WeightRelaxEngine:
     """
     权重平滑/松弛引擎
