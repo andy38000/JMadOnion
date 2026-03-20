@@ -1223,6 +1223,13 @@ class GoSkinningMaya:
                    backgroundColor=[0.35, 0.45, 0.35],
                    command=lambda x: self.auto_detect_and_fill())
         
+        cmds.separator(height=3, style='none')
+        
+        # 从选择检测骨骼（支持模型和顶点）
+        cmds.button(label='从选择检测骨骼 (可选模型或顶点)', height=30,
+                   backgroundColor=[0.45, 0.35, 0.45],
+                   command=lambda x: self.auto_detect_bones_from_selection())
+        
         cmds.separator(height=10, style='none')
         
         # 网格选择
@@ -1758,6 +1765,179 @@ class GoSkinningMaya:
                               button=['OK'])
         else:
             cmds.warning('未检测到相关骨骼!')
+    
+    def auto_detect_bones_from_selection(self):
+        """
+        从选择自动检测骨骼
+        支持：
+        1. 选择模型 -> 检测整个模型区域的骨骼
+        2. 选择顶点 -> 检测这些顶点最近的骨骼
+        """
+        print('[GoSkinning] ========== 从选择检测骨骼 ==========')
+        
+        # 获取选择
+        sel = cmds.ls(selection=True, flatten=True)
+        if not sel:
+            cmds.warning('请先选择模型或顶点!')
+            return
+        
+        print('[GoSkinning] 选择项: {}'.format(sel[:10]))  # 只显示前10个
+        
+        # 判断选择类型
+        vertex_positions = []
+        mesh_name = None
+        
+        # 检查是否选择了顶点
+        vertices = cmds.filterExpand(sel, selectionMask=31)  # 31 = vertices
+        
+        if vertices:
+            # 选择了顶点
+            print('[GoSkinning] 检测到顶点选择: {} 个'.format(len(vertices)))
+            
+            # 获取顶点位置
+            for vtx in vertices:
+                pos = cmds.xform(vtx, q=True, ws=True, t=True)
+                vertex_positions.append(pos)
+            
+            # 从顶点获取mesh名称
+            mesh_name = vertices[0].split('.')[0]
+            
+        else:
+            # 检查是否选择了模型
+            for obj in sel:
+                shapes = cmds.listRelatives(obj, shapes=True, type='mesh')
+                if shapes:
+                    mesh_name = obj.split('|')[-1]
+                    print('[GoSkinning] 检测到模型选择: {}'.format(mesh_name))
+                    
+                    # 获取所有顶点位置
+                    num_verts = cmds.polyEvaluate(mesh_name, vertex=True)
+                    # 采样（最多500个顶点）
+                    sample_step = max(1, num_verts // 500)
+                    for i in range(0, num_verts, sample_step):
+                        pos = cmds.xform('{}.vtx[{}]'.format(mesh_name, i), q=True, ws=True, t=True)
+                        vertex_positions.append(pos)
+                    break
+        
+        if not vertex_positions:
+            cmds.warning('请选择模型或顶点!')
+            return
+        
+        vertex_positions = np.array(vertex_positions, dtype=np.float32)
+        print('[GoSkinning] 用于检测的顶点数: {}'.format(len(vertex_positions)))
+        
+        # 获取场景中所有骨骼
+        all_joints = cmds.ls(type='joint', long=True)
+        if not all_joints:
+            cmds.warning('场景中没有骨骼!')
+            return
+        
+        print('[GoSkinning] 场景骨骼数: {}'.format(len(all_joints)))
+        
+        # 计算每个顶点最近的骨骼
+        detected_joints = set()
+        joint_vote_count = {}
+        
+        cmds.progressWindow(title='检测骨骼',
+                           progress=0,
+                           status='分析顶点...',
+                           isInterruptable=True,
+                           maxValue=len(vertex_positions))
+        
+        try:
+            for v_idx, pos in enumerate(vertex_positions):
+                if cmds.progressWindow(query=True, isCancelled=True):
+                    break
+                
+                cmds.progressWindow(edit=True, progress=v_idx)
+                
+                min_dist = float('inf')
+                closest_joint = None
+                
+                for joint in all_joints:
+                    # 获取骨骼位置
+                    joint_pos = cmds.xform(joint, q=True, ws=True, t=True)
+                    joint_pos = np.array(joint_pos)
+                    
+                    # 获取骨骼尾部
+                    children = cmds.listRelatives(joint, children=True, type='joint')
+                    if children:
+                        tail_pos = cmds.xform(children[0], q=True, ws=True, t=True)
+                        tail_pos = np.array(tail_pos)
+                    else:
+                        # 末端骨骼，延长方向
+                        parent = cmds.listRelatives(joint, parent=True, type='joint')
+                        if parent:
+                            parent_pos = cmds.xform(parent[0], q=True, ws=True, t=True)
+                            parent_pos = np.array(parent_pos)
+                            direction = joint_pos - parent_pos
+                            length = np.linalg.norm(direction)
+                            if length > 0.001:
+                                tail_pos = joint_pos + direction
+                            else:
+                                tail_pos = joint_pos + np.array([0, 1, 0])
+                        else:
+                            tail_pos = joint_pos + np.array([0, 1, 0])
+                    
+                    # 计算到骨骼段的距离
+                    dist = self.point_to_segment_dist(pos, joint_pos, tail_pos)
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_joint = joint
+                
+                if closest_joint:
+                    short_name = closest_joint.split('|')[-1]
+                    detected_joints.add(short_name)
+                    joint_vote_count[short_name] = joint_vote_count.get(short_name, 0) + 1
+        
+        finally:
+            cmds.progressWindow(endProgress=True)
+        
+        if not detected_joints:
+            cmds.warning('未检测到相关骨骼!')
+            return
+        
+        # 按投票数排序
+        sorted_joints = sorted(joint_vote_count.items(), key=lambda x: -x[1])
+        print('[GoSkinning] 检测到的骨骼 (按相关度):')
+        for j, count in sorted_joints[:20]:
+            print('  {} : {} 票'.format(j, count))
+        
+        # 只保留有一定投票的骨骼（至少1%的顶点）
+        min_votes = max(1, len(vertex_positions) * 0.01)
+        relevant_joints = [j for j, count in sorted_joints if count >= min_votes]
+        
+        # 补全父骨骼链
+        final_joints = set(relevant_joints)
+        for joint_name in relevant_joints:
+            # 找到完整路径
+            matches = [j for j in all_joints if j.split('|')[-1] == joint_name]
+            if matches:
+                parent = cmds.listRelatives(matches[0], parent=True, type='joint')
+                while parent:
+                    parent_short = parent[0].split('|')[-1]
+                    final_joints.add(parent_short)
+                    parent = cmds.listRelatives(parent[0], parent=True, type='joint')
+        
+        final_joints = list(final_joints)
+        print('[GoSkinning] 最终骨骼数 (含父链): {}'.format(len(final_joints)))
+        
+        # 更新UI
+        if mesh_name:
+            cmds.textField(self.mesh_field, edit=True, text=mesh_name)
+        
+        cmds.textField(self.joint_field, edit=True, text=','.join(final_joints))
+        
+        # 显示结果
+        msg = '检测完成!\n\n'
+        msg += '分析顶点数: {}\n'.format(len(vertex_positions))
+        msg += '检测到骨骼: {} 个\n\n'.format(len(final_joints))
+        msg += '主要骨骼:\n'
+        for j, count in sorted_joints[:10]:
+            msg += '  {} ({} 顶点)\n'.format(j, count)
+        
+        cmds.confirmDialog(title='检测结果', message=msg, button=['OK'])
     
     def get_selected_mesh(self):
         """获取选中的网格（支持多选）"""
