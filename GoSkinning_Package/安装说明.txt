@@ -1,0 +1,47 @@
+GoSkinning 插件安装说明
+========================
+
+安装步骤：
+
+1. 复制文件夹
+   将 "GoSkinning" 文件夹复制到：
+   C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\
+
+2. 复制启动脚本
+   将 "GoSkinning_Launcher.ms" 复制到：
+   C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\
+
+3. 放置训练好的模型（可选）
+   将训练好的 .pth 或 .pt 模型文件复制到：
+   C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\GoSkinning\models\
+
+4. 启动插件
+   在 3ds Max 中按 F11 打开 MAXScript 监听器，输入：
+   fileIn @"C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\GoSkinning_Launcher.ms"
+
+
+自动启动设置（可选）：
+
+如果希望每次打开 3ds Max 自动加载插件：
+1. 进入文件夹：C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\startup\
+2. 创建文件 load_goskinning.ms，内容如下：
+   fileIn @"C:\Users\Admin\AppData\Local\Autodesk\3dsMax\2022 - 64bit\ENU\scripts\GoSkinning_Launcher.ms"
+
+
+文件结构：
+GoSkinning/
+├── __init__.py
+├── startup.py
+├── core/
+│   ├── skinning_engine.py
+│   ├── weight_calculator.py
+│   ├── bone_utils.py
+│   ├── mesh_utils.py
+│   └── ml_inference.py
+├── ui/
+│   └── main_window.py
+├── algorithms/
+├── utils/
+├── config/
+├── ml/
+└── models/          <- 训练好的模型放这里
