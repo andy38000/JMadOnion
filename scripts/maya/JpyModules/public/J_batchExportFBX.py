@@ -554,9 +554,9 @@ def show():
                 bgc=(0.25, 0.35, 0.55))
     cmds.setParent('..')
 
-    cmds.tabLayout(tabs, e=True,
-                   tabLabel=[(tab1, u'Batch Export'),
-                             (tab2, u'Single Export')])
+    cmds.tabLayout(tabs, edit=True,
+                   tabLabelIndex=[(1, 'Batch Export'),
+                                  (2, 'Single Export')])
     cmds.setParent(main)
 
     # ---------- 日志 ----------
