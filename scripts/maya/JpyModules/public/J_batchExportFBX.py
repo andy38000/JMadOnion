@@ -555,8 +555,8 @@ def show():
     cmds.setParent('..')
 
     cmds.tabLayout(tabs, e=True,
-                   tli=[(tab1, u'Batch Export'),
-                        (tab2, u'Single Export')])
+                   tabLabel=[(tab1, u'Batch Export'),
+                             (tab2, u'Single Export')])
     cmds.setParent(main)
 
     # ---------- 日志 ----------
